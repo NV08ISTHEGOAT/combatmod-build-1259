@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "combatmod",
+  "version": "${version}",
+  "name": "Combat Utilities",
+  "description": "Invisibility reveal and extended reach with an aqua GUI. Press R to open.",
+  "authors": ["Nicholas"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": { "client": ["com.example.combatmod.CombatModClient"] },
+  "mixins": ["combatmod.mixins.json"],
+  "depends": { "fabricloader": ">=0.15.0", "minecraft": ">=1.21.11", "java": ">=21", "fabric-api": "*" }
+}
