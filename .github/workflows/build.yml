@@ -1,0 +1,24 @@
+name: Build Combat Utilities Mod
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.12.1"
+      - run: chmod +x ./gradlew || true
+      - run: gradle build --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: combatmod-jar
+          path: build/libs/*-1.0.0.jar
+          if-no-files-found: error
