@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.example.combatmod.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["EntityInvisibilityMixin"],
+  "injectors": { "defaultRequire": 1 }
+}
