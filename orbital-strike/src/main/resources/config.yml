@@ -1,0 +1,70 @@
+# Orbital Strike Cannon
+# Text uses MiniMessage formatting: https://docs.advntr.dev/minimessage/format.html
+# Apply changes with /osc reload
+
+# How far away (in blocks) you can aim the rod.
+max-range: 300
+# Time between the cast and the TNT appearing. 10 ticks = 0.5 s, like the Unstable SMP.
+strike-delay-ticks: 10
+# The rod breaks when it's used (not in creative mode).
+consume-rod: true
+# Seconds a player has to wait between strikes. 0 = no cooldown.
+cooldown-seconds: 0
+# Announce every strike in chat.
+broadcast: false
+
+nuke:
+  # How many blocks above the target block the TNT appears.
+  height: 72
+  # TNT dropped straight onto the target.
+  center-tnt: 1
+  # Rings around the target: radius 6, 11, 16 ... 51 by default.
+  rings: 10
+  first-radius: 6
+  radius-step: 5
+  # TNT on the innermost and outermost ring. Rings in between scale evenly.
+  first-ring-tnt: 15
+  last-ring-tnt: 119
+  # Random offset in blocks added to each TNT so the rings look natural.
+  jitter: 1.75
+  # true: each TNT explodes the moment it lands.
+  # false: TNT uses fuse-ticks below (80 = vanilla).
+  detonate-on-impact: true
+  fuse-ticks: 80
+  # Explosion strength of each TNT. Vanilla TNT is 4.0.
+  power: 4.0
+
+stab:
+  # The column starts this many blocks above the target block...
+  start-above: 5
+  # ...with a layer of TNT every this many blocks going down...
+  step: 4
+  tnt-per-layer: 5
+  # ...until it hits a block at least this blast resistant (obsidian = 1200,
+  # bedrock and reinforced deepslate are higher) or the bottom of the world.
+  stop-at-resistance: 1200
+  # 1 tick = the whole column goes off at once.
+  fuse-ticks: 1
+  power: 4.0
+
+items:
+  nuke:
+    name: "<gradient:#ff5f1f:#ffd000><bold>Orbital Strike Cannon</bold></gradient> <gray>(Nuke)"
+    lore:
+      - "<gray>Cast at a block to drop"
+      - "<red>10 rings of TNT</red> <gray>on it from orbit."
+  stab:
+    name: "<gradient:#00c3ff:#a100ff><bold>Orbital Strike Cannon</bold></gradient> <gray>(Stab)"
+    lore:
+      - "<gray>Cast at a block to drill a"
+      - "<aqua>TNT column</aqua> <gray>straight down to bedrock."
+
+messages:
+  prefix: "<dark_gray>[<gold>Orbital</gold>]</dark_gray> "
+  no-target: "<red>No block in range to aim at."
+  cooldown: "<red>Cannon recharging: <white><seconds>s</white> left."
+  no-permission: "<red>You don't have permission to do that."
+  fired: "<yellow><type> strike inbound at <white><x> <y> <z></white>!"
+  broadcast: "<gold><player></gold> <yellow>called in an orbital <type> strike!"
+  given: "<green>Gave <white><amount>x</white> <type> cannon to <white><player></white>."
+  reloaded: "<green>Config reloaded."

@@ -1,0 +1,38 @@
+name: OrbitalStrikeCannon
+version: '${project.version}'
+main: me.nv08.orbitalstrike.OrbitalStrikePlugin
+api-version: '1.21'
+description: Unstable SMP style Orbital Strike Cannon - Nuke and Stab fishing rods.
+author: NV08
+
+commands:
+  osc:
+    description: Orbital Strike Cannon commands.
+    usage: /<command> <give|strike|reload>
+    aliases: [orbitalcannon]
+
+permissions:
+  orbitalstrike.use:
+    description: Fire an Orbital Strike Cannon rod.
+    default: true
+  orbitalstrike.give:
+    description: /osc give
+    default: op
+  orbitalstrike.strike:
+    description: /osc strike (fire a strike without a rod)
+    default: op
+  orbitalstrike.reload:
+    description: /osc reload
+    default: op
+  orbitalstrike.bypasscooldown:
+    description: Ignore the cooldown between strikes.
+    default: op
+  orbitalstrike.admin:
+    description: All Orbital Strike Cannon permissions.
+    default: op
+    children:
+      orbitalstrike.use: true
+      orbitalstrike.give: true
+      orbitalstrike.strike: true
+      orbitalstrike.reload: true
+      orbitalstrike.bypasscooldown: true
