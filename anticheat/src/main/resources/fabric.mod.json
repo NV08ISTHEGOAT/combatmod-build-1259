@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "combatguard",
+  "version": "${version}",
+  "name": "CombatGuard",
+  "description": "Anticheat. Install on the server for server-side checks; install on clients too for injection and cheat mod detection.",
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.example.combatguard.CombatGuard"],
+    "client": ["com.example.combatguard.client.CombatGuardClient"]
+  },
+  "mixins": ["combatguard.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

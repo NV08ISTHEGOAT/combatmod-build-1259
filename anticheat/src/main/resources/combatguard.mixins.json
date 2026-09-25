@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.example.combatguard.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "EntityStatusS2CPacketAccessor",
+    "LivingEntityInvoker",
+    "PlayerMoveC2SPacketAccessor",
+    "ServerCommonNetworkHandlerMixin",
+    "ServerPlayNetworkHandlerMixin"
+  ],
+  "client": [
+    "client.ClientPlayerInteractionManagerMixin",
+    "client.KeyBindingMixin",
+    "client.MinecraftClientMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}
