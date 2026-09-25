@@ -1,0 +1,21 @@
+name: CombatGuard
+version: '${version}'
+main: com.example.combatguard.CombatGuardPlugin
+api-version: '1.21'
+description: Anticheat for Paper 1.21.11 (combat, movement, world, inventory and packet checks)
+depend: [packetevents]
+commands:
+  combatguard:
+    description: CombatGuard staff commands
+    aliases: [cg]
+    permission: combatguard.command
+permissions:
+  combatguard.command:
+    description: Use /combatguard
+    default: op
+  combatguard.alerts:
+    description: Receive anticheat alerts
+    default: op
+  combatguard.bypass:
+    description: Never flagged by any check
+    default: false
