@@ -1,4 +1,8 @@
-# CombatGuard
+# CombatGuard (Fabric)
+
+> Running a Paper server? Use the plugin in [`../plugin`](../plugin/README.md). This Fabric mod is then the
+> optional **client mod** players can install: the plugin talks to it over plugin channels for injection and
+> cheat mod detection.
 
 Anticheat for **Minecraft 1.21.11 (Fabric)**. It has two parts in one jar:
 
