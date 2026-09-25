@@ -1,9 +1,7 @@
 package me.nv08.orbitalstrike;
 
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
-import org.bukkit.GameMode;
 import org.bukkit.Material;
-import org.bukkit.Sound;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -64,10 +62,11 @@ public final class RodListener implements Listener {
             return;
         }
 
-        if (settings.consumeRod() && player.getGameMode() != GameMode.CREATIVE) {
+        if (settings.consumeRod()) {
+            // One tap: the rod snaps like a tool running out of durability, even in creative.
+            player.broadcastSlotBreak(hand);
             rod.setAmount(rod.getAmount() - 1);
             player.getInventory().setItem(hand, rod.getAmount() > 0 ? rod : null);
-            player.playSound(player, Sound.ENTITY_ITEM_BREAK, 1f, 1f);
         }
         lastStrike.put(player.getUniqueId(), now);
         plugin.fire(type, target, player, player);

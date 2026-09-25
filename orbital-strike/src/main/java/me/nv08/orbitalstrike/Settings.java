@@ -16,28 +16,29 @@ public record Settings(
 
     public record Nuke(
             int height,
-            int centerTnt,
+            int compressedTicks,
+            int ringIntervalTicks,
             int rings,
             double firstRadius,
             double radiusStep,
-            int firstRingTnt,
-            int lastRingTnt,
+            double tntSpacing,
+            int centerTnt,
             double jitter,
-            boolean detonateOnImpact,
-            int fuseTicks,
+            int explodeAfterLandingTicks,
             float power
     ) {
-        /** Furthest a nuke TNT can land from the target, in blocks. */
-        public double outerRadius() {
-            return rings <= 0 ? jitter : firstRadius + radiusStep * (rings - 1) + jitter;
+        public double ringRadius(int ring) {
+            return firstRadius + radiusStep * ring;
         }
 
+        /** Furthest a nuke TNT can land from the target, in blocks. */
+        public double outerRadius() {
+            return rings <= 0 ? jitter : ringRadius(rings - 1) + jitter;
+        }
+
+        /** TNT on a ring, spaced about tnt-spacing blocks apart. */
         public int tntOnRing(int ring) {
-            if (rings <= 1) {
-                return firstRingTnt;
-            }
-            double t = (double) ring / (rings - 1);
-            return (int) Math.round(firstRingTnt + (lastRingTnt - firstRingTnt) * t);
+            return Math.max(1, (int) Math.round(2 * Math.PI * ringRadius(ring) / tntSpacing));
         }
     }
 
@@ -61,16 +62,16 @@ public record Settings(
                 Math.max(0, config.getInt("cooldown-seconds", 0)),
                 config.getBoolean("broadcast", false),
                 new Nuke(
-                        Math.max(0, n.getInt("height", 72)),
-                        Math.max(0, n.getInt("center-tnt", 1)),
-                        Math.max(0, n.getInt("rings", 10)),
+                        Math.max(1, n.getInt("height", 80)),
+                        Math.max(0, n.getInt("compressed-ticks", 20)),
+                        Math.max(0, n.getInt("ring-interval-ticks", 3)),
+                        Math.max(0, n.getInt("rings", 8)),
                         Math.max(0, n.getDouble("first-radius", 6)),
                         Math.max(0, n.getDouble("radius-step", 5)),
-                        Math.max(1, n.getInt("first-ring-tnt", 15)),
-                        Math.max(1, n.getInt("last-ring-tnt", 119)),
-                        Math.max(0, n.getDouble("jitter", 1.75)),
-                        n.getBoolean("detonate-on-impact", true),
-                        Math.max(1, n.getInt("fuse-ticks", 80)),
+                        Math.max(0.5, n.getDouble("tnt-spacing", 2.5)),
+                        Math.max(0, n.getInt("center-tnt", 3)),
+                        Math.max(0, n.getDouble("jitter", 0)),
+                        Math.max(0, n.getInt("explode-after-landing-ticks", 20)),
                         (float) Math.max(0, n.getDouble("power", 4.0))
                 ),
                 new Stab(

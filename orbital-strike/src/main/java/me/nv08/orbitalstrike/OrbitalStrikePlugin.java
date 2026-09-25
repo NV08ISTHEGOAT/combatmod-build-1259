@@ -7,11 +7,16 @@ import org.bukkit.Bukkit;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.File;
+
 public final class OrbitalStrikePlugin extends JavaPlugin {
+
+    private static final int CONFIG_VERSION = 2;
 
     private final MiniMessage miniMessage = MiniMessage.miniMessage();
     private Settings settings;
@@ -20,6 +25,7 @@ public final class OrbitalStrikePlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        replaceOutdatedConfig();
         saveDefaultConfig();
         loadSettings();
         items = new CannonItems(this);
@@ -39,6 +45,20 @@ public final class OrbitalStrikePlugin extends JavaPlugin {
         if (strikes != null) {
             strikes.shutdown();
         }
+    }
+
+    /** Moves a config.yml from an older version aside so the new defaults get written. */
+    private void replaceOutdatedConfig() {
+        File file = new File(getDataFolder(), "config.yml");
+        if (!file.exists() || YamlConfiguration.loadConfiguration(file).getInt("config-version", 1) >= CONFIG_VERSION) {
+            return;
+        }
+        File backup = new File(getDataFolder(), "config-old.yml");
+        if ((backup.exists() && !backup.delete()) || !file.renameTo(backup)) {
+            getLogger().warning("config.yml is from an older version; delete it to get the new settings.");
+            return;
+        }
+        getLogger().info("config.yml was from an older version and has been replaced. Your old one is config-old.yml.");
     }
 
     public void loadSettings() {

@@ -2,11 +2,15 @@
 # Text uses MiniMessage formatting: https://docs.advntr.dev/minimessage/format.html
 # Apply changes with /osc reload
 
+# Don't change this. When the plugin updates the format, it replaces an older
+# config.yml and keeps yours as config-old.yml.
+config-version: 2
+
 # How far away (in blocks) you can aim the rod.
 max-range: 300
 # Time between the cast and the TNT appearing. 10 ticks = 0.5 s, like the Unstable SMP.
 strike-delay-ticks: 10
-# The rod breaks when it's used (not in creative mode).
+# One tap: the rod breaks as soon as it fires.
 consume-rod: true
 # Seconds a player has to wait between strikes. 0 = no cooldown.
 cooldown-seconds: 0
@@ -15,22 +19,23 @@ broadcast: false
 
 nuke:
   # How many blocks above the target block the TNT appears.
-  height: 72
-  # TNT dropped straight onto the target.
-  center-tnt: 1
-  # Rings around the target: radius 6, 11, 16 ... 51 by default.
-  rings: 10
+  height: 80
+  # The TNT falls as one compressed bundle for this many ticks (20 ticks = 1 s)...
+  compressed-ticks: 20
+  # ...then splits into rings, inside ring first, one ring every this many ticks.
+  ring-interval-ticks: 3
+  # Rings around the target: radius 6, 11, 16 ... 41 by default.
+  rings: 8
   first-radius: 6
   radius-step: 5
-  # TNT on the innermost and outermost ring. Rings in between scale evenly.
-  first-ring-tnt: 15
-  last-ring-tnt: 119
-  # Random offset in blocks added to each TNT so the rings look natural.
-  jitter: 1.75
-  # true: each TNT explodes the moment it lands.
-  # false: TNT uses fuse-ticks below (80 = vanilla).
-  detonate-on-impact: true
-  fuse-ticks: 80
+  # Blocks between TNT on a ring. Smaller = more TNT.
+  tnt-spacing: 2.5
+  # TNT that lands right on the target.
+  center-tnt: 3
+  # Random offset in blocks for each TNT. 0 = perfect rings.
+  jitter: 0
+  # Once all the TNT has landed, it explodes this many ticks later (20 = 1 s).
+  explode-after-landing-ticks: 20
   # Explosion strength of each TNT. Vanilla TNT is 4.0.
   power: 4.0
 
@@ -51,13 +56,13 @@ items:
   nuke:
     name: "<gradient:#ff5f1f:#ffd000><bold>Orbital Strike Cannon</bold></gradient> <gray>(Nuke)"
     lore:
-      - "<gray>Cast at a block to drop"
-      - "<red>10 rings of TNT</red> <gray>on it from orbit."
+      - "<gray>One tap: drops <red>8 rings of TNT</red>"
+      - "<gray>on the block you aim at."
   stab:
     name: "<gradient:#00c3ff:#a100ff><bold>Orbital Strike Cannon</bold></gradient> <gray>(Stab)"
     lore:
-      - "<gray>Cast at a block to drill a"
-      - "<aqua>TNT column</aqua> <gray>straight down to bedrock."
+      - "<gray>One tap: drills a <aqua>TNT column</aqua>"
+      - "<gray>straight down to bedrock."
 
 messages:
   prefix: "<dark_gray>[<gold>Orbital</gold>]</dark_gray> "
