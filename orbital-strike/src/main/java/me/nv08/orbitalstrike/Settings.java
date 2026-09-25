@@ -15,17 +15,18 @@ public record Settings(
 ) {
 
     public record Nuke(
-            int height,
-            int compressedTicks,
+            int shootHeight,
+            double shootSpeed,
+            int skyHeight,
+            int ringDelayTicks,
             int ringIntervalTicks,
             int rings,
             double firstRadius,
             double radiusStep,
             double tntSpacing,
-            int centerTnt,
-            double jitter,
             int explodeAfterLandingTicks,
-            float power
+            float power,
+            float corePower
     ) {
         public double ringRadius(int ring) {
             return firstRadius + radiusStep * ring;
@@ -33,7 +34,7 @@ public record Settings(
 
         /** Furthest a nuke TNT can land from the target, in blocks. */
         public double outerRadius() {
-            return rings <= 0 ? jitter : ringRadius(rings - 1) + jitter;
+            return rings <= 0 ? 0 : ringRadius(rings - 1);
         }
 
         /** TNT on a ring, spaced about tnt-spacing blocks apart. */
@@ -62,17 +63,18 @@ public record Settings(
                 Math.max(0, config.getInt("cooldown-seconds", 0)),
                 config.getBoolean("broadcast", false),
                 new Nuke(
-                        Math.max(1, n.getInt("height", 80)),
-                        Math.max(0, n.getInt("compressed-ticks", 20)),
-                        Math.max(0, n.getInt("ring-interval-ticks", 3)),
+                        Math.max(1, n.getInt("shoot-height", 80)),
+                        Math.max(0.5, Math.min(3.9, n.getDouble("shoot-speed", 3.0))),
+                        Math.max(1, n.getInt("sky-height", 60)),
+                        Math.max(0, n.getInt("ring-delay-ticks", 10)),
+                        Math.max(0, n.getInt("ring-interval-ticks", 2)),
                         Math.max(0, n.getInt("rings", 8)),
                         Math.max(0, n.getDouble("first-radius", 6)),
-                        Math.max(0, n.getDouble("radius-step", 5)),
-                        Math.max(0.5, n.getDouble("tnt-spacing", 2.5)),
-                        Math.max(0, n.getInt("center-tnt", 3)),
-                        Math.max(0, n.getDouble("jitter", 0)),
+                        Math.max(0, n.getDouble("radius-step", 4)),
+                        Math.max(0.5, n.getDouble("tnt-spacing", 1.5)),
                         Math.max(0, n.getInt("explode-after-landing-ticks", 20)),
-                        (float) Math.max(0, n.getDouble("power", 4.0))
+                        (float) Math.max(0, n.getDouble("power", 4.0)),
+                        (float) Math.max(0, n.getDouble("core-power", 8.0))
                 ),
                 new Stab(
                         s.getInt("start-above", 5),

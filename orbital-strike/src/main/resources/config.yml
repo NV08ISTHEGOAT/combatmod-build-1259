@@ -4,7 +4,7 @@
 
 # Don't change this. When the plugin updates the format, it replaces an older
 # config.yml and keeps yours as config-old.yml.
-config-version: 2
+config-version: 3
 
 # How far away (in blocks) you can aim the rod.
 max-range: 300
@@ -17,27 +17,32 @@ cooldown-seconds: 0
 # Announce every strike in chat.
 broadcast: false
 
+# Nuke: a compressed TNT shoots down and lands on the target, lit rings of TNT
+# appear in the sky, fall straight down, and everything explodes on the ground.
+# (20 ticks = 1 second)
 nuke:
-  # How many blocks above the target block the TNT appears.
-  height: 80
-  # The TNT falls as one compressed bundle for this many ticks (20 ticks = 1 s)...
-  compressed-ticks: 20
-  # ...then splits into rings, inside ring first, one ring every this many ticks.
-  ring-interval-ticks: 3
-  # Rings around the target: radius 6, 11, 16 ... 41 by default.
+  # The compressed TNT starts this many blocks above the target...
+  shoot-height: 80
+  # ...and flies down at this many blocks per tick (max 3.9).
+  shoot-speed: 3.0
+  # The lit rings appear this many blocks above the target...
+  sky-height: 60
+  # ...this many ticks after the compressed TNT lands...
+  ring-delay-ticks: 10
+  # ...one ring every this many ticks, inside ring first.
+  ring-interval-ticks: 2
+  # Rings around the target: radius 6, 10, 14 ... 34 by default.
   rings: 8
   first-radius: 6
-  radius-step: 5
-  # Blocks between TNT on a ring. Smaller = more TNT.
-  tnt-spacing: 2.5
-  # TNT that lands right on the target.
-  center-tnt: 3
-  # Random offset in blocks for each TNT. 0 = perfect rings.
-  jitter: 0
-  # Once all the TNT has landed, it explodes this many ticks later (20 = 1 s).
+  radius-step: 4
+  # Blocks between TNT on a ring. Smaller = tighter rings and more TNT.
+  tnt-spacing: 1.5
+  # Once all the TNT has landed, it explodes this many ticks later.
   explode-after-landing-ticks: 20
-  # Explosion strength of each TNT. Vanilla TNT is 4.0.
+  # Explosion strength of each ring TNT (vanilla TNT = 4.0)...
   power: 4.0
+  # ...and of the compressed TNT in the middle.
+  core-power: 8.0
 
 stab:
   # The column starts this many blocks above the target block...

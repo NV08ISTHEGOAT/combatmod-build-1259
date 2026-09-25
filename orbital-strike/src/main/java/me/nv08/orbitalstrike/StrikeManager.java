@@ -21,8 +21,10 @@ import org.bukkit.util.Vector;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BooleanSupplier;
@@ -31,25 +33,25 @@ import java.util.logging.Level;
 /**
  * Runs the strikes.
  *
- * <p>Nuke: the TNT falls as one compressed bundle, splits into rings (inside ring first) that fan out
- * to land exactly on their circle, sits on the ground, and all of it explodes a moment after the last
- * one lands. While falling and sitting, the TNT is a falling block rather than primed TNT: Spigot only
- * ticks 100 primed TNT per tick (max-tnt-per-tick), which would leave most of a nuke hanging in the air.
+ * <p>Nuke: one compressed TNT shoots down from the sky and lands on the target. Then rings of lit TNT
+ * appear in the sky (inside ring first), fall straight down so the rings stay perfect over any terrain,
+ * and once they've all landed everything explodes on the ground, the compressed TNT in the middle too.
  *
  * <p>Stab: a column of TNT from just above the target down to bedrock, all going off at once.
  */
 public final class StrikeManager {
 
-    // Falling block physics (per tick: velocity.y -= GRAVITY, move, velocity *= DRAG).
     private static final double GRAVITY = 0.04;
-    private static final double DRAG = 0.98;
-    /** A nuke that somehow hasn't landed after this long goes off anyway. */
+    /** A nuke that somehow hasn't finished after this long goes off anyway. */
     private static final int MAX_NUKE_TICKS = 20 * 30;
+    /** The ring TNT goes off over this many ticks: still one blast, but not one huge lag spike. */
+    private static final int DETONATION_SPREAD_TICKS = 6;
     /** Extra blocks around the drop zone that stay loaded, for the explosions themselves. */
     private static final int CHUNK_MARGIN_BLOCKS = 8;
 
     private final OrbitalStrikePlugin plugin;
     private final ForcedChunks forcedChunks;
+    private final TntTickLimit tntTickLimit;
     private final BlockData tntBlock = Material.TNT.createBlockData();
     private final List<NukeStrike> nukes = new ArrayList<>();
     private BukkitTask nukeTask;
@@ -58,42 +60,39 @@ public final class StrikeManager {
         final World world;
         final Settings.Nuke nuke;
         final @Nullable Player source;
-        final List<Bomb> bombs = new ArrayList<>();
-        final List<TNTPrimed> tnt = new ArrayList<>();
-        int age;
+        final double cx;
+        final double cz;
+        final int targetY;
+        FallingBlock core;
+        int coreLandedAt = -1;
+        int ringsSpawned;
+        final List<TNTPrimed> ringTnt = new ArrayList<>();
+        final Set<TNTPrimed> falling = new HashSet<>();
         int allLandedAt = -1;
+        @Nullable TNTPrimed coreTnt;
         boolean detonated;
+        int age;
 
-        NukeStrike(World world, Settings.Nuke nuke, @Nullable Player source) {
+        NukeStrike(World world, Settings.Nuke nuke, @Nullable Player source, Block target) {
             this.world = world;
             this.nuke = nuke;
             this.source = source;
+            this.cx = target.getX() + 0.5;
+            this.cz = target.getZ() + 0.5;
+            this.targetY = target.getY();
         }
 
         boolean finished() {
-            return detonated && tnt.stream().noneMatch(Entity::isValid);
-        }
-    }
-
-    private static final class Bomb {
-        FallingBlock entity;
-        final double targetX;
-        final double targetZ;
-        final int releaseTick;
-        boolean released;
-        boolean landed;
-
-        Bomb(FallingBlock entity, double targetX, double targetZ, int releaseTick) {
-            this.entity = entity;
-            this.targetX = targetX;
-            this.targetZ = targetZ;
-            this.releaseTick = releaseTick;
+            return detonated
+                    && ringTnt.stream().noneMatch(Entity::isValid)
+                    && (coreTnt == null || !coreTnt.isValid());
         }
     }
 
     public StrikeManager(OrbitalStrikePlugin plugin) {
         this.plugin = plugin;
         this.forcedChunks = new ForcedChunks(plugin);
+        this.tntTickLimit = new TntTickLimit(plugin.getLogger());
         forcedChunks.cleanUpLeftovers();
     }
 
@@ -117,7 +116,7 @@ public final class StrikeManager {
                 .toArray(CompletableFuture[]::new);
         CompletableFuture<Void> ready = CompletableFuture.allOf(loads);
 
-        playLaunchEffects(world, target, settings.nuke().height());
+        playLaunchEffects(world, target, settings.nuke().shootHeight());
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> ready.whenComplete((ignored, error) -> onMain(() -> {
             if (error != null) {
@@ -125,10 +124,11 @@ public final class StrikeManager {
             }
             chunks.forEach(ref -> forcedChunks.acquire(world, ref));
             forcedChunks.save();
+            tntTickLimit.lift(world);
             BooleanSupplier finished = type == StrikeType.NUKE
                     ? startNuke(settings.nuke(), target, source)::finished
                     : fireStab(settings.stab(), target, source);
-            releaseWhenDone(chunks, finished);
+            releaseWhenDone(world, chunks, finished);
         })), settings.strikeDelayTicks());
     }
 
@@ -138,41 +138,22 @@ public final class StrikeManager {
             nukeTask = null;
         }
         for (NukeStrike strike : nukes) {
-            strike.bombs.forEach(bomb -> bomb.entity.remove());
+            strike.core.remove();
+            strike.ringTnt.forEach(Entity::remove);
         }
         nukes.clear();
         forcedChunks.releaseAll();
+        tntTickLimit.restoreAll(Bukkit.getWorlds());
     }
 
     // ---- Nuke ----
 
     private NukeStrike startNuke(Settings.Nuke nuke, Block target, @Nullable Player source) {
         World world = target.getWorld();
-        ThreadLocalRandom random = ThreadLocalRandom.current();
-        double cx = target.getX() + 0.5;
-        double cz = target.getZ() + 0.5;
-        double y = Math.min(target.getY() + 1 + nuke.height(), world.getMaxHeight() - 1);
-        Location bundle = new Location(world, cx, y, cz);
-
-        NukeStrike strike = new NukeStrike(world, nuke, source);
-        for (int i = 0; i < nuke.centerTnt(); i++) {
-            strike.bombs.add(new Bomb(spawnBomb(bundle, true), cx, cz, nuke.compressedTicks()));
-        }
-        for (int ring = 0; ring < nuke.rings(); ring++) {
-            double radius = nuke.ringRadius(ring);
-            int count = nuke.tntOnRing(ring);
-            int releaseTick = nuke.compressedTicks() + ring * nuke.ringIntervalTicks();
-            double phase = random.nextDouble(Math.PI * 2);
-            for (int i = 0; i < count; i++) {
-                double angle = phase + Math.PI * 2 * i / count;
-                // Uniform random point in a disc of radius `jitter` (0 = exact ring).
-                double jitterAngle = random.nextDouble(Math.PI * 2);
-                double jitter = nuke.jitter() * Math.sqrt(random.nextDouble());
-                double x = cx + Math.cos(angle) * radius + Math.cos(jitterAngle) * jitter;
-                double z = cz + Math.sin(angle) * radius + Math.sin(jitterAngle) * jitter;
-                strike.bombs.add(new Bomb(spawnBomb(bundle, true), x, z, releaseTick));
-            }
-        }
+        NukeStrike strike = new NukeStrike(world, nuke, source, target);
+        double y = Math.min(target.getY() + 1 + nuke.shootHeight(), world.getMaxHeight() - 1);
+        strike.core = spawnBlock(new Location(world, strike.cx, y, strike.cz), true);
+        world.playSound(strike.core.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 8f, 0.5f);
 
         nukes.add(strike);
         if (nukeTask == null) {
@@ -198,44 +179,24 @@ public final class StrikeManager {
     /** Advances one nuke by a tick. Returns true once it has exploded. */
     private boolean tickNuke(NukeStrike strike) {
         strike.age++;
-        boolean allLanded = true;
-        boolean bundled = false;
-        for (Bomb bomb : strike.bombs) {
-            if (bomb.landed) {
-                continue;
+        Settings.Nuke nuke = strike.nuke;
+
+        if (strike.coreLandedAt < 0) {
+            shootCore(strike);
+        } else {
+            // Light up the rings in the sky, inside ring first.
+            int sinceLanding = strike.age - strike.coreLandedAt;
+            while (strike.ringsSpawned < nuke.rings()
+                    && sinceLanding >= nuke.ringDelayTicks() + strike.ringsSpawned * nuke.ringIntervalTicks()) {
+                spawnRing(strike, strike.ringsSpawned++);
             }
-            if (!bomb.entity.isValid()) {
-                // It hit something the prediction missed (a cliff side, a mob): sit where it stopped.
-                bomb.entity = spawnBomb(bomb.entity.getLocation(), false);
-                bomb.landed = true;
-                continue;
-            }
-            if (!bomb.released) {
-                if (strike.age >= bomb.releaseTick) {
-                    release(strike.world, bomb);
-                } else {
-                    bundled = true;
-                }
-            }
-            if (land(strike.world, bomb)) {
-                bomb.landed = true;
-            } else {
-                allLanded = false;
+            strike.falling.removeIf(tnt -> !tnt.isValid() || tnt.isOnGround() || tnt.isInWater() || tnt.isInLava());
+            if (strike.ringsSpawned == nuke.rings() && strike.falling.isEmpty() && strike.allLandedAt < 0) {
+                strike.allLandedAt = strike.age;
             }
         }
 
-        Location center = strike.bombs.isEmpty() ? null : strike.bombs.getFirst().entity.getLocation();
-        if (bundled && center != null && strike.age % 2 == 0) {
-            strike.world.spawnParticle(Particle.FLAME, center.clone().add(0, 0.5, 0), 6, 0.3, 0.3, 0.3, 0.02, null, true);
-        }
-        if (allLanded && strike.allLandedAt < 0) {
-            strike.allLandedAt = strike.age;
-            if (center != null) {
-                strike.world.playSound(center, Sound.ENTITY_TNT_PRIMED, 8f, 0.8f);
-            }
-        }
-
-        boolean fuseDone = strike.allLandedAt >= 0 && strike.age >= strike.allLandedAt + strike.nuke.explodeAfterLandingTicks();
+        boolean fuseDone = strike.allLandedAt >= 0 && strike.age >= strike.allLandedAt + nuke.explodeAfterLandingTicks();
         if (fuseDone || strike.age >= MAX_NUKE_TICKS) {
             detonate(strike);
             return true;
@@ -243,52 +204,74 @@ public final class StrikeManager {
         return false;
     }
 
-    /** Sends a bomb from the bundle toward its spot on the ring, timed to arrive as it hits the ground. */
-    private static void release(World world, Bomb bomb) {
-        bomb.released = true;
-        FallingBlock entity = bomb.entity;
-        Location at = entity.getLocation();
-        Vector velocity = entity.getVelocity();
-        double dx = bomb.targetX - at.getX();
-        double dz = bomb.targetZ - at.getZ();
-        if (dx == 0 && dz == 0) {
+    /** Moves the compressed TNT down at a steady speed and sets it down on the target. */
+    private void shootCore(NukeStrike strike) {
+        World world = strike.world;
+        FallingBlock core = strike.core;
+        if (!core.isValid()) {
+            // It hit something on the way (a tree, a mob): it stops right there.
+            strike.core = spawnBlock(core.getLocation(), false);
+            landCore(strike);
             return;
         }
-        int ticks = ticksToFall(at.getY(), velocity.getY(), surfaceY(world, bomb.targetX, bomb.targetZ));
-        // Horizontal distance covered in n ticks is v * (1 - DRAG^n) / (1 - DRAG).
-        double scale = (1 - DRAG) / (1 - Math.pow(DRAG, ticks));
-        entity.setVelocity(new Vector(dx * scale, velocity.getY(), dz * scale));
+        Location at = core.getLocation();
+        double speed = strike.nuke.shootSpeed();
+        world.spawnParticle(Particle.FLAME, at.getX(), at.getY() + 1, at.getZ(), 10, 0.15, 0.6, 0.15, 0.02, null, true);
+        world.spawnParticle(Particle.LARGE_SMOKE, at.getX(), at.getY() + 1.5, at.getZ(), 4, 0.2, 0.8, 0.2, 0.01, null, true);
+
+        double ground = surfaceY(world, strike.cx, strike.cz);
+        if (at.getY() - speed - GRAVITY <= ground) {
+            core.setGravity(false);
+            core.setVelocity(new Vector());
+            core.teleport(new Location(world, strike.cx, ground, strike.cz));
+            landCore(strike);
+        } else {
+            core.setVelocity(new Vector(0, -speed, 0));
+        }
     }
 
-    /** If the bomb reaches the ground this tick, stops it on the surface instead of letting it land as a block. */
-    private static boolean land(World world, Bomb bomb) {
-        FallingBlock entity = bomb.entity;
-        Location at = entity.getLocation();
-        Vector velocity = entity.getVelocity();
-        double nextX = at.getX() + velocity.getX();
-        double nextZ = at.getZ() + velocity.getZ();
-        double ground = surfaceY(world, nextX, nextZ);
-        if (at.getY() + velocity.getY() - GRAVITY > ground) {
-            return false;
+    private void landCore(NukeStrike strike) {
+        strike.coreLandedAt = strike.age;
+        Location at = strike.core.getLocation();
+        strike.world.playSound(at, Sound.BLOCK_ANVIL_LAND, 6f, 0.5f);
+        strike.world.playSound(at, Sound.ENTITY_GENERIC_EXPLODE, 3f, 1.6f);
+        strike.world.spawnParticle(Particle.EXPLOSION, at.getX(), at.getY() + 0.5, at.getZ(), 3, 0.5, 0.3, 0.5, 0, null, true);
+        strike.world.spawnParticle(Particle.CLOUD, at.getX(), at.getY() + 0.2, at.getZ(), 40, 1.5, 0.1, 1.5, 0.05, null, true);
+    }
+
+    private void spawnRing(NukeStrike strike, int ring) {
+        Settings.Nuke nuke = strike.nuke;
+        World world = strike.world;
+        double radius = nuke.ringRadius(ring);
+        int count = nuke.tntOnRing(ring);
+        double y = Math.min(strike.targetY + 1 + nuke.skyHeight(), world.getMaxHeight() - 1);
+        double phase = ThreadLocalRandom.current().nextDouble(Math.PI * 2);
+        for (int i = 0; i < count; i++) {
+            double angle = phase + Math.PI * 2 * i / count;
+            double x = strike.cx + Math.cos(angle) * radius;
+            double z = strike.cz + Math.sin(angle) * radius;
+            TNTPrimed tnt = spawnTnt(world, x, y, z, MAX_NUKE_TICKS, nuke.power(), true, strike.source);
+            strike.ringTnt.add(tnt);
+            strike.falling.add(tnt);
         }
-        entity.setGravity(false);
-        entity.setVelocity(new Vector());
-        entity.teleport(new Location(world, nextX, ground, nextZ));
-        return true;
+        world.playSound(new Location(world, strike.cx, y, strike.cz), Sound.ENTITY_TNT_PRIMED, 8f, 0.6f + ring * 0.1f);
     }
 
     private void detonate(NukeStrike strike) {
         strike.detonated = true;
         ThreadLocalRandom random = ThreadLocalRandom.current();
-        for (Bomb bomb : strike.bombs) {
-            Location at = bomb.entity.getLocation();
-            bomb.entity.remove();
-            strike.tnt.add(spawnTnt(strike.world, at.getX(), at.getY(), at.getZ(),
-                    1 + random.nextInt(3), strike.nuke.power(), true, strike.source));
+        for (TNTPrimed tnt : strike.ringTnt) {
+            if (tnt.isValid()) {
+                tnt.setFuseTicks(1 + random.nextInt(DETONATION_SPREAD_TICKS));
+            }
         }
+        Location core = strike.core.getLocation();
+        strike.core.remove();
+        strike.coreTnt = spawnTnt(strike.world, core.getX(), core.getY(), core.getZ(), 1,
+                strike.nuke.corePower(), true, strike.source);
     }
 
-    private FallingBlock spawnBomb(Location location, boolean gravity) {
+    private FallingBlock spawnBlock(Location location, boolean gravity) {
         return location.getWorld().spawn(location, FallingBlock.class, block -> {
             block.setBlockData(tntBlock);
             block.setVelocity(new Vector());
@@ -298,21 +281,6 @@ public final class StrikeManager {
             block.setHurtEntities(false);
             block.setPersistent(false);
         });
-    }
-
-    /** Ticks until something falling from y with vertical speed vy reaches groundY. */
-    private static int ticksToFall(double y, double vy, double groundY) {
-        int ticks = 0;
-        while (ticks < MAX_NUKE_TICKS) {
-            vy -= GRAVITY;
-            y += vy;
-            ticks++;
-            if (y <= groundY) {
-                break;
-            }
-            vy *= DRAG;
-        }
-        return ticks;
     }
 
     /** Top of the highest solid/liquid block at x, z. */
@@ -374,7 +342,7 @@ public final class StrikeManager {
         }
     }
 
-    private void releaseWhenDone(List<ForcedChunks.ChunkRef> chunks, BooleanSupplier finished) {
+    private void releaseWhenDone(World world, List<ForcedChunks.ChunkRef> chunks, BooleanSupplier finished) {
         int[] waited = {0};
         Bukkit.getScheduler().runTaskTimer(plugin, task -> {
             waited[0] += 10;
@@ -382,6 +350,7 @@ public final class StrikeManager {
                 return;
             }
             task.cancel();
+            tntTickLimit.restore(world);
             // Stay loaded a moment longer for chain reactions and falling blocks.
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 chunks.forEach(forcedChunks::release);

@@ -16,7 +16,7 @@ import java.io.File;
 
 public final class OrbitalStrikePlugin extends JavaPlugin {
 
-    private static final int CONFIG_VERSION = 2;
+    private static final int CONFIG_VERSION = 3;
 
     private final MiniMessage miniMessage = MiniMessage.miniMessage();
     private Settings settings;
