@@ -17,13 +17,30 @@ namespace WaveClips.Editor
         public double Position => _mixer == null ? 0 : Math.Max(0, _mixer.PositionSeconds - Latency);
         public float MasterVolume { get; set; } = 1f;
 
+        /// <summary>Why preview audio is unavailable (null when it works). The editor still works without it.</summary>
+        public string Error { get; private set; }
+
         public void Load(string[] wavs)
         {
             Dispose();
+            Error = null;
             if (wavs.Length == 0) return;
             _mixer = new Mixer(wavs.Select(w => new WaveFileReader(w)).ToArray(), this);
-            _out = new WasapiOut(AudioClientShareMode.Shared, true, 60);
-            _out.Init(_mixer);
+            try
+            {
+                _out = new WasapiOut(AudioClientShareMode.Shared, true, 60);
+                _out.Init(_mixer);
+            }
+            catch (Exception ex)
+            {
+                // Typically no speakers/headphones (E_NOTFOUND from the default endpoint).
+                try { _out?.Dispose(); } catch { }
+                _out = null;
+                Error = (uint)ex.HResult == 0x80070490
+                    ? "No speakers or headphones found - the preview is silent (exports still include all audio)."
+                    : "Audio preview unavailable: " + ex.Message;
+                Core.Log.Warn("Editor audio preview: " + ex.Message);
+            }
         }
 
         public void SetTrack(int index, float gain, double offsetSeconds) => _mixer?.SetTrack(index, gain, offsetSeconds);

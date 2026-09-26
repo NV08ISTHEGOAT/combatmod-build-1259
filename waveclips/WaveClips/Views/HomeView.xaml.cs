@@ -85,6 +85,7 @@ namespace WaveClips.Views
             ClipHint.Text = h == null || h.IsEmpty ? "no hotkey set" : $"or press {h}";
             InstallFfmpegButton.Visibility = FFmpeg.Available ? Visibility.Collapsed : Visibility.Visible;
             GameSub.Text = AppHost.State.HasGame ? "Game audio track follows this game" : "Watching for your games";
+            GameIcon.Visibility = AppHost.State.GameIcon != null ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void UpdateRecent()

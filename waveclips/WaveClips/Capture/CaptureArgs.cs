@@ -62,7 +62,8 @@ namespace WaveClips.Capture
             var m = c.Monitor;
             var enc = EffectiveEncoder(c, level);
             var inv = CultureInfo.InvariantCulture;
-            var a = new List<string> { "-hide_banner", "-loglevel", "verbose", "-nostats", "-progress", "pipe:1", "-stats_period", "1", "-y" };
+            // level+ prefixes every log line with [error]/[warning]/... so real errors can be picked out.
+            var a = new List<string> { "-hide_banner", "-loglevel", "level+verbose", "-nostats", "-progress", "pipe:1", "-stats_period", "1", "-y" };
 
             // Audio inputs first: they connect before the video source starts, see AudioEngine sync.
             // (No -thread_queue_size: current FFmpeg only accepts it as an output option.)

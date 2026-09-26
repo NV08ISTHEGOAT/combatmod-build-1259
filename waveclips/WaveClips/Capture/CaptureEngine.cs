@@ -54,6 +54,7 @@ namespace WaveClips.Capture
         private BufferState _state = BufferState.Off;
         private string _status = "Replay buffer is off";
         private string _error = "";
+        private string _notice = "";
         private bool _isRecording;
         private string _recordingTime = "00:00";
         private double _fps;
@@ -68,6 +69,8 @@ namespace WaveClips.Capture
         public bool IsActive => State == BufferState.Running || State == BufferState.Starting;
         public string StatusText { get => _status; private set => Set(ref _status, value); }
         public string ErrorText { get => _error; private set => Set(ref _error, value); }
+        /// <summary>Non-fatal information, e.g. "using the compatibility capture mode".</summary>
+        public string NoticeText { get => _notice; private set => Set(ref _notice, value); }
         public bool IsRecording { get => _isRecording; private set => Set(ref _isRecording, value); }
         public string RecordingTime { get => _recordingTime; private set => Set(ref _recordingTime, value); }
         public double Fps { get => _fps; private set => Set(ref _fps, value); }
@@ -328,13 +331,15 @@ namespace WaveClips.Capture
                     session.Exited += OnSessionExited;
                     if (session.HasExited) { OnSessionExited(session); return false; }
                     _workingLevel[cfg.Signature] = level;
+                    bool fellBack = level != levels[0] && level != known;
                     Ui(() =>
                     {
                         PipelineText = session.LevelLabel;
                         EncoderName = session.EffectiveEncoder.Label;
-                        ErrorText = level == levels[0] || level == known ? "" :
-                            "Using a fallback capture mode because the preferred one failed: " + lastError;
+                        ErrorText = "";
+                        NoticeText = fellBack ? $"Using {session.LevelLabel} - the faster mode didn't start on this PC ({lastError})" : "";
                     });
+                    if (fellBack) Log.Warn($"Capture fell back to {level}: {lastError}");
                     SetStatus(BufferState.Running, StatusFor(cfg));
                     return true;
                 }
@@ -414,6 +419,7 @@ namespace WaveClips.Capture
             }
             ReleaseAudio();
             SetStatus(BufferState.Off, _wantBuffer ? "Stopped" : "Replay buffer is off", "");
+            Ui(() => NoticeText = "");
             Ui(() => { Fps = 0; DroppedFrames = 0; BufferSizeText = "0 MB"; });
         }
 

@@ -9,10 +9,11 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel>
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="CountText" Style="{StaticResource H1}" Text="0 clips" />
-                    <TextBlock x:Name="SizeText" Style="{StaticResource Dim}" VerticalAlignment="Bottom" Margin="12,0,0,5" />
-                </StackPanel>
+                <DockPanel Margin="0,0,16,0">
+                    <TextBlock x:Name="CountText" DockPanel.Dock="Left" Style="{StaticResource H1}" Text="0 clips" />
+                    <TextBlock x:Name="SizeText" Style="{StaticResource Dim}" VerticalAlignment="Bottom" Margin="12,0,0,5"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
                 <WrapPanel x:Name="FilterChips" Margin="0,10,0,0" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -28,7 +29,7 @@
                     <ComboBoxItem Content="Name" />
                 </ComboBox>
                 <Button Style="{StaticResource IconButton}" Content="&#xE72C;" ToolTip="Refresh" Margin="6,0,0,0" Click="OnRefresh" />
-                <Button Content="&#xE838;  Folder" Margin="6,0,0,0" Click="OnOpenFolder" FontFamily="{StaticResource HeadingFont}" />
+                <Button Margin="6,0,0,0" Click="OnOpenFolder"><Button.Content><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE838;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,7,0" /><TextBlock Text="Folder" VerticalAlignment="Center" /></StackPanel></Button.Content></Button>
             </StackPanel>
         </Grid>
 

@@ -57,7 +57,7 @@
                                     <TextBox Text="{Binding ExeNames, UpdateSourceTrigger=LostFocus}" ToolTip="Comma separated, e.g. javaw.exe, java.exe" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="5">
-                                    <TextBlock Text="WINDOW TITLE CONTAINS (OPTIONAL)" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock Text="TITLE CONTAINS (OPTIONAL)" Style="{StaticResource SectionLabel}" />
                                     <TextBox Text="{Binding WindowTitleHints, UpdateSourceTrigger=LostFocus}"
                                              ToolTip="Any of these words must be in the window title. Needed when the exe is generic (Minecraft runs as javaw.exe)." />
                                 </StackPanel>

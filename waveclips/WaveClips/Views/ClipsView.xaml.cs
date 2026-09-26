@@ -70,7 +70,9 @@ namespace WaveClips.Views
             var shown = _view.Cast<ClipItem>().ToList();
             CountText.Text = $"{shown.Count} clip{(shown.Count == 1 ? "" : "s")}";
             long bytes = shown.Sum(c => c.Size);
-            SizeText.Text = bytes > 0 ? $"{bytes / (double)(1 << 30):0.00} GB  ·  {AppHost.Settings.ClipFolder}" : AppHost.Settings.ClipFolder;
+            string size = bytes >= 1L << 30 ? $"{bytes / (double)(1 << 30):0.0} GB" : $"{bytes / (double)(1 << 20):0} MB";
+            SizeText.Text = bytes > 0 ? $"{size}  ·  {AppHost.Settings.ClipFolder}" : AppHost.Settings.ClipFolder;
+            SizeText.ToolTip = AppHost.Settings.ClipFolder;
             EmptyState.Visibility = shown.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             var hk = AppHost.Settings.ClipHotkey;
             EmptyHint.Text = AppHost.Library.Items.Count == 0

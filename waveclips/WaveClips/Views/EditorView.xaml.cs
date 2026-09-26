@@ -819,7 +819,9 @@ namespace WaveClips.Views
                 ClipTitle.Text = System.IO.Path.GetFileNameWithoutExtension(_p.SourcePath);
                 _mixer = _p.Tracks.Select(t => new TrackMixVm(t, () => { Timeline.InvalidateVisual(); ApplyAudioMix(); _autosave.Stop(); _autosave.Start(); })).ToList();
                 MixerList.ItemsSource = _mixer;
-                NoAudioText.Visibility = _p.Tracks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                NoAudioText.Text = _p.Tracks.Count == 0 ? "This clip has no audio." : _audio.Error ?? "";
+                NoAudioText.Visibility = _p.Tracks.Count == 0 || _audio.Error != null ? Visibility.Visible : Visibility.Collapsed;
+                NoAudioText.Foreground = (Brush)FindResource(_audio.Error != null ? "Warning" : "TextDim");
                 FadeInSlider.Value = _p.FadeIn; FadeOutSlider.Value = _p.FadeOut;
                 FadeInText.Text = $"{_p.FadeIn:0.0}s"; FadeOutText.Text = $"{_p.FadeOut:0.0}s";
                 BrightSlider.Value = _p.Brightness; ContrastSlider.Value = _p.Contrast; SatSlider.Value = _p.Saturation;

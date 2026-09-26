@@ -28,8 +28,10 @@
                                       Click="OnBufferSwitch" ToolTip="Turn the replay buffer on/off" />
                         </StackPanel>
                         <TextBlock Text="{Binding StatusText}" Style="{StaticResource Body}" Foreground="{StaticResource Label}" Margin="0,4,0,0" />
-                        <TextBlock Text="{Binding ErrorText}" Style="{StaticResource Body}" Foreground="{StaticResource Danger}" Margin="0,6,0,0" FontSize="12"
-                                   MaxWidth="560" HorizontalAlignment="Left" />
+                        <TextBlock Text="{Binding NoticeText}" Style="{StaticResource Body}" Foreground="{StaticResource Warning}" Margin="0,6,0,0" FontSize="12"
+                                   MaxWidth="560" MaxHeight="34" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left" ToolTip="{Binding NoticeText}" />
+                        <TextBlock Text="{Binding ErrorText}" Style="{StaticResource Body}" Foreground="{StaticResource Danger}" Margin="0,4,0,0" FontSize="12"
+                                   MaxWidth="560" MaxHeight="34" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left" ToolTip="{Binding ErrorText}" />
                         <Button x:Name="InstallFfmpegButton" Content="Install FFmpeg (one click)" Style="{StaticResource AccentButton}" HorizontalAlignment="Left"
                                 Margin="0,10,0,0" Click="OnInstallFfmpeg" Visibility="Collapsed" />
                     </StackPanel>
@@ -58,8 +60,8 @@
                     <StackPanel>
                         <TextBlock Text="GAME" Style="{StaticResource SectionLabel}" />
                         <StackPanel Orientation="Horizontal">
-                            <Image x:Name="GameIcon" Width="26" Height="26" Margin="0,0,10,0" Source="{Binding GameIcon}" />
-                            <TextBlock Text="{Binding GameName}" Style="{StaticResource H2}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <Image x:Name="GameIcon" Width="26" Height="26" Margin="0,0,10,0" Source="{Binding GameIcon}" Visibility="Collapsed" />
+                            <TextBlock Text="{Binding GameName}" Style="{StaticResource H2}" FontSize="15" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <TextBlock x:Name="GameSub" Style="{StaticResource Dim}" Margin="0,6,0,0" Text="Watching for your games" />
                     </StackPanel>

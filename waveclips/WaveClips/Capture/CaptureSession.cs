@@ -62,6 +62,7 @@ namespace WaveClips.Capture
         private readonly PipeSet _pipes;
         private Process _proc;
         private readonly LinkedList<string> _errTail = new LinkedList<string>();
+        private readonly List<string> _errorLines = new List<string>();
         private double _openedMarker = double.NaN;
 
         public CaptureSession(CaptureConfig config, PipelineLevel level, AudioEngine audio, string bufferRoot)
@@ -97,9 +98,9 @@ namespace WaveClips.Capture
             _proc.OutputDataReceived += (_, e) => { if (e.Data != null) OnProgress(e.Data); };
             _proc.Exited += (_, __) =>
             {
-                string tail;
-                lock (_errTail) tail = string.Join("\n", _errTail);
-                ErrorSummary = Summarize(tail);
+                string tail; List<string> errors;
+                lock (_errTail) { tail = string.Join("\n", _errTail); errors = _errorLines.ToList(); }
+                ErrorSummary = Summarize(errors, tail);
                 Log.Info($"Capture ffmpeg exited ({SafeExitCode()}). Last output:\n{tail}");
                 _audio.ClosePipes(_pipes);
                 Exited?.Invoke(this);
@@ -126,6 +127,7 @@ namespace WaveClips.Capture
             {
                 _errTail.AddLast(line);
                 if (_errTail.Count > 60) _errTail.RemoveFirst();
+                if ((line.Contains("[error]") || line.Contains("[fatal]")) && _errorLines.Count < 12) _errorLines.Add(line);
             }
             if (!double.IsNaN(VideoStart)) return;
             double now = AppClock.Seconds;
@@ -161,17 +163,20 @@ namespace WaveClips.Capture
             }
         }
 
-        private static string Summarize(string tail)
+        /// <summary>Short human readable reason: the first real [error] lines, without ffmpeg's context prefixes.</summary>
+        internal static string Summarize(IReadOnlyList<string> errorLines, string tail)
         {
-            var lines = tail.Split('\n').Where(l =>
-                l.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                l.IndexOf("fail", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                l.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                l.IndexOf("not supported", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                l.IndexOf("unable", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-            var pick = lines.Count > 0 ? lines : tail.Split('\n').TakeLast(3).ToList();
-            var s = string.Join(" · ", pick.Select(l => l.Trim()).Where(l => l.Length > 0).TakeLast(3));
-            return s.Length > 400 ? s.Substring(0, 400) + "…" : s;
+            static string Clean(string l) =>
+                System.Text.RegularExpressions.Regex.Replace(l, @"\[[^\]]*@ ?[0-9a-fA-Fx]+\]\s*|\[(error|fatal|warning|info|verbose)\]\s*", "").Trim();
+            var picked = errorLines.Select(Clean)
+                .Where(l => l.Length > 0 && !l.StartsWith("Conversion failed") && !l.StartsWith("Terminating thread") &&
+                            !l.StartsWith("Task finished with error") && !l.Contains("Could not open encoder before EOF") &&
+                            !l.StartsWith("Error while filtering") && !l.StartsWith("Nothing was written"))
+                .Distinct().Take(2).ToList();
+            if (picked.Count == 0)
+                picked = tail.Split('\n').Select(Clean).Where(l => l.Length > 0).TakeLast(2).ToList();
+            var s = string.Join(" · ", picked);
+            return s.Length > 300 ? s.Substring(0, 300) + "…" : s;
         }
 
         /// <summary>Asks ffmpeg to finish the current segment and exit ('q'), killing it if it hangs.</summary>
