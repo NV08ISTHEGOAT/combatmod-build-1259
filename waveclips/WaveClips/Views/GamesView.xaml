@@ -1,0 +1,73 @@
+<UserControl x:Class="WaveClips.Views.GamesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:WaveClips.Controls">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="26,20,26,26">
+            <c:WavePanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="54" Height="54" Background="{StaticResource AccentDim}" BorderBrush="{StaticResource Accent}" BorderThickness="1">
+                        <Grid>
+                            <TextBlock Text="&#xE7FC;" Style="{StaticResource Icon}" FontSize="24" Foreground="{StaticResource Accent}" />
+                            <Image Source="{Binding GameIcon}" Width="34" Height="34" />
+                        </Grid>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="DETECTED RIGHT NOW" Style="{StaticResource SectionLabel}" Margin="0" />
+                        <TextBlock Text="{Binding GameName}" Style="{StaticResource H1}" FontSize="24" />
+                        <TextBlock x:Name="DetectedSub" Style="{StaticResource Dim}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="AddRunning" Content="+  Add a running program ▾" Click="OnAddRunning" />
+                        <Button Content="+  Add manually" Margin="8,0,0,0" Click="OnAddManual" />
+                    </StackPanel>
+                </Grid>
+            </c:WavePanel>
+
+            <TextBlock Style="{StaticResource Dim}" Margin="2,14,0,10"
+                       Text="Enabled games are watched in the background. The detected game is used for the 'Game' audio track, clip names/folders and (optionally) to start the replay buffer automatically. The game is still recorded fullscreen from your monitor." />
+
+            <ItemsControl x:Name="GameList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <c:WavePanel Margin="0,0,0,12" Padding="16,14">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="14" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding Enabled}" VerticalAlignment="Bottom" Margin="0,0,14,6"
+                                          ToolTip="Watch for this game" />
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="NAME" Style="{StaticResource SectionLabel}" />
+                                    <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource HeadingFont}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="3">
+                                    <TextBlock Text="PROGRAM (.EXE) NAMES" Style="{StaticResource SectionLabel}" />
+                                    <TextBox Text="{Binding ExeNames, UpdateSourceTrigger=LostFocus}" ToolTip="Comma separated, e.g. javaw.exe, java.exe" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="5">
+                                    <TextBlock Text="WINDOW TITLE CONTAINS (OPTIONAL)" Style="{StaticResource SectionLabel}" />
+                                    <TextBox Text="{Binding WindowTitleHints, UpdateSourceTrigger=LostFocus}"
+                                             ToolTip="Any of these words must be in the window title. Needed when the exe is generic (Minecraft runs as javaw.exe)." />
+                                </StackPanel>
+                                <Button Grid.Column="6" Style="{StaticResource IconButton}" Content="&#xE74D;" VerticalAlignment="Bottom" Margin="10,0,0,0"
+                                        ToolTip="Remove" Click="OnRemove" Tag="{Binding}" />
+                            </Grid>
+                        </c:WavePanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

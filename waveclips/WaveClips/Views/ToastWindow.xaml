@@ -1,0 +1,36 @@
+<Window x:Class="WaveClips.Views.ToastWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" Topmost="True"
+        ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize" Focusable="False"
+        SizeToContent="WidthAndHeight" Title="WaveClips notification">
+    <Grid Margin="16" x:Name="Root" Opacity="0">
+        <Grid.RenderTransform>
+            <TranslateTransform x:Name="Slide" X="40" />
+        </Grid.RenderTransform>
+        <Border Background="#F2071B24" BorderBrush="{StaticResource Accent}" BorderThickness="1" x:Name="Card"
+                MinWidth="300" MaxWidth="420" Effect="{StaticResource Glow}">
+            <Grid>
+                <Grid Margin="14,12,18,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="IconBg" Width="38" Height="38" CornerRadius="19" Background="{StaticResource AccentDim}"
+                            BorderBrush="{StaticResource Accent}" BorderThickness="1" VerticalAlignment="Center">
+                        <TextBlock x:Name="IconText" Text="&#xE73E;" Style="{StaticResource Icon}" Foreground="{StaticResource Accent}" FontSize="17" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="TitleText" Style="{StaticResource H2}" FontSize="16" Text="Clip saved!" />
+                        <TextBlock x:Name="MessageText" Style="{StaticResource Dim}" Foreground="{StaticResource Label}" Margin="0,2,0,0" />
+                    </StackPanel>
+                </Grid>
+                <Rectangle Width="5" Height="5" Fill="{StaticResource Accent}" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                <Rectangle Width="5" Height="5" Fill="{StaticResource Accent}" HorizontalAlignment="Right" VerticalAlignment="Top" />
+                <Rectangle Width="5" Height="5" Fill="{StaticResource Accent}" HorizontalAlignment="Left" VerticalAlignment="Bottom" />
+                <Rectangle Width="5" Height="5" Fill="{StaticResource Accent}" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
+                <Rectangle x:Name="Life" Height="2" Fill="{StaticResource AccentGradient}" VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="0" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

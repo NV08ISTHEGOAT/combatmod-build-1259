@@ -1,0 +1,129 @@
+<UserControl x:Class="WaveClips.Views.ClipsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:WaveClips.Controls">
+    <DockPanel Margin="26,18,20,0">
+        <Grid DockPanel.Dock="Top" Margin="0,0,6,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="CountText" Style="{StaticResource H1}" Text="0 clips" />
+                    <TextBlock x:Name="SizeText" Style="{StaticResource Dim}" VerticalAlignment="Bottom" Margin="12,0,0,5" />
+                </StackPanel>
+                <WrapPanel x:Name="FilterChips" Margin="0,10,0,0" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                <Grid Width="220">
+                    <TextBox x:Name="Search" TextChanged="OnSearch" Padding="30,6,8,6" />
+                    <TextBlock Text="&#xE721;" Style="{StaticResource Icon}" HorizontalAlignment="Left" Margin="10,0,0,0" Foreground="{StaticResource TextDim}" FontSize="13" IsHitTestVisible="False" />
+                </Grid>
+                <ComboBox x:Name="SortBox" Width="150" Margin="8,0,0,0" SelectionChanged="OnSort">
+                    <ComboBoxItem Content="Newest first" IsSelected="True" />
+                    <ComboBoxItem Content="Oldest first" />
+                    <ComboBoxItem Content="Longest" />
+                    <ComboBoxItem Content="Biggest" />
+                    <ComboBoxItem Content="Name" />
+                </ComboBox>
+                <Button Style="{StaticResource IconButton}" Content="&#xE72C;" ToolTip="Refresh" Margin="6,0,0,0" Click="OnRefresh" />
+                <Button Content="&#xE838;  Folder" Margin="6,0,0,0" Click="OnOpenFolder" FontFamily="{StaticResource HeadingFont}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid>
+            <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
+                <TextBlock Text="&#xE8B2;" Style="{StaticResource Icon}" FontSize="54" Foreground="{StaticResource Separator}" />
+                <TextBlock Text="No clips here yet" Style="{StaticResource H2}" HorizontalAlignment="Center" Margin="0,12,0,4" />
+                <TextBlock x:Name="EmptyHint" Style="{StaticResource Dim}" HorizontalAlignment="Center" TextAlignment="Center" />
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="Grid" Margin="0,0,0,20">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border x:Name="Card" Width="286" Margin="0,0,14,14" Background="{StaticResource CardGradient}" BorderBrush="{StaticResource Separator}"
+                                    BorderThickness="1" Cursor="Hand" MouseLeftButtonUp="OnCardClick" Tag="{Binding}">
+                                <Border.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="✎  Edit" Click="OnMenuEdit" />
+                                        <MenuItem Header="▶  Play" Click="OnMenuPlay" />
+                                        <MenuItem Header="⧉  Copy (paste into Discord)" Click="OnMenuCopy" />
+                                        <MenuItem Header="📁  Show in folder" Click="OnMenuShow" />
+                                        <MenuItem Header="✏  Rename…" Click="OnMenuRename" />
+                                        <MenuItem Header="★  Favorite" Click="OnMenuFavorite" />
+                                        <Separator />
+                                        <MenuItem Header="🗑  Delete (to Recycle Bin)" Click="OnMenuDelete" />
+                                    </ContextMenu>
+                                </Border.ContextMenu>
+                                <StackPanel>
+                                    <Grid Height="161" Background="{StaticResource Bg3}" ClipToBounds="True">
+                                        <TextBlock Text="&#xE714;" Style="{StaticResource Icon}" FontSize="30" Foreground="{StaticResource Separator}" />
+                                        <Image x:Name="Thumb" Source="{Binding Thumbnail}" Stretch="UniformToFill" RenderTransformOrigin="0.5,0.5" />
+                                        <Border x:Name="PlayOverlay" Background="#6604121A" Opacity="0">
+                                            <Border Width="54" Height="54" CornerRadius="27" Background="#CC00E5FF" Effect="{StaticResource Glow}">
+                                                <TextBlock Text="&#xE70F;" Style="{StaticResource Icon}" Foreground="#FF04121A" FontSize="22" />
+                                            </Border>
+                                        </Border>
+                                        <Border Background="#CC04121A" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" Padding="6,2">
+                                            <TextBlock Text="{Binding Kind}" FontSize="10" FontFamily="{StaticResource HeadingFont}" Foreground="{StaticResource Accent}" />
+                                        </Border>
+                                        <ToggleButton HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6" Width="28" Height="28"
+                                                      IsChecked="{Binding Favorite, Mode=OneWay}" Click="OnFavoriteClick" Tag="{Binding}" ToolTip="Favorite">
+                                            <ToggleButton.Template>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Border Background="#99000000" CornerRadius="14">
+                                                        <TextBlock x:Name="Star" Text="&#xE734;" FontFamily="{StaticResource IconFont}" FontSize="14"
+                                                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsChecked" Value="True">
+                                                            <Setter TargetName="Star" Property="Text" Value="&#xE735;" />
+                                                            <Setter TargetName="Star" Property="Foreground" Value="{StaticResource Warning}" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </ToggleButton.Template>
+                                        </ToggleButton>
+                                        <Border Background="#DD000000" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Padding="6,2">
+                                            <TextBlock Text="{Binding DurationText}" FontSize="11" Foreground="White" FontFamily="{StaticResource MonoFont}" />
+                                        </Border>
+                                    </Grid>
+                                    <StackPanel Margin="12,10,12,12">
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontSize="13" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" />
+                                        <DockPanel Margin="0,4,0,0">
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding SizeText}" Style="{StaticResource Dim}" FontSize="11" />
+                                            <TextBlock FontSize="11">
+                                                <Run Text="{Binding Game, Mode=OneWay}" Foreground="{StaticResource Accent}" />
+                                                <Run Text="  ·  " Foreground="{StaticResource TextDim}" />
+                                                <Run Text="{Binding DateText, Mode=OneWay}" Foreground="{StaticResource TextDim}" />
+                                            </TextBlock>
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding TracksText}" Style="{StaticResource Dim}" FontSize="10" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                    <Setter TargetName="Card" Property="Effect" Value="{StaticResource GlowSoft}" />
+                                    <Setter TargetName="PlayOverlay" Property="Opacity" Value="1" />
+                                    <Setter TargetName="Thumb" Property="RenderTransform">
+                                        <Setter.Value>
+                                            <ScaleTransform ScaleX="1.06" ScaleY="1.06" />
+                                        </Setter.Value>
+                                    </Setter>
+                                </Trigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</UserControl>

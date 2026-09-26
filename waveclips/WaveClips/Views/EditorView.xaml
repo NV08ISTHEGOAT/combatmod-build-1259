@@ -1,0 +1,348 @@
+<UserControl x:Class="WaveClips.Views.EditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:WaveClips.Controls"
+             xmlns:e="clr-namespace:WaveClips.Editor"
+             Focusable="True" KeyboardNavigation.IsTabStop="False">
+    <Grid>
+        <!-- ============================== EDITOR ============================== -->
+        <Grid x:Name="EditorRoot" Margin="16,10,16,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" MinHeight="220" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Toolbar -->
+            <DockPanel Margin="0,0,0,8">
+                <Button DockPanel.Dock="Right" x:Name="ExportButton" Style="{StaticResource AccentButton}" Click="OnExportTab" Padding="18,8">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE898;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="EXPORT" />
+                    </StackPanel>
+                </Button>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource IconButton}" Content="&#xE8E5;" ToolTip="Open another clip" Click="OnOpenOther" />
+                    <TextBlock x:Name="ClipTitle" Style="{StaticResource H2}" VerticalAlignment="Center" Margin="6,0,18,0" MaxWidth="360" TextTrimming="CharacterEllipsis" />
+                    <Rectangle Width="1" Height="22" Fill="{StaticResource Separator}" Margin="0,0,8,0" />
+                    <Button Style="{StaticResource IconButton}" x:Name="UndoBtn" Content="&#xE7A7;" ToolTip="Undo (Ctrl+Z)" Click="OnUndo" />
+                    <Button Style="{StaticResource IconButton}" x:Name="RedoBtn" Content="&#xE7A6;" ToolTip="Redo (Ctrl+Y)" Click="OnRedo" />
+                    <Rectangle Width="1" Height="22" Fill="{StaticResource Separator}" Margin="8,0" />
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Split at playhead (S)" Click="OnSplit">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C6;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Split" /></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Cut / restore the selected piece (Delete)" Click="OnToggleCut">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Cut piece" /></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Trim start to playhead (I)" Click="OnTrimIn">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE892;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim in" /></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Trim end to playhead (O)" Click="OnTrimOut">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE893;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim out" /></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Add text at playhead (T)" Click="OnAddText">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8D2;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Text" /></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource GhostButton}" ToolTip="Render this frame with all effects (F)" Click="OnFxPreview">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="FX preview" /></StackPanel>
+                    </Button>
+                </StackPanel>
+            </DockPanel>
+
+            <!-- Preview + inspector -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="372" />
+                </Grid.ColumnDefinitions>
+
+                <Border Background="Black" BorderBrush="{StaticResource Separator}" BorderThickness="1" ClipToBounds="True">
+                    <Grid x:Name="VideoHost" SizeChanged="OnVideoHostSize" Background="Black">
+                        <MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Manual" ScrubbingEnabled="True" IsMuted="True"
+                                      Stretch="Uniform" MediaOpened="OnMediaOpened" MediaFailed="OnMediaFailed" MediaEnded="OnMediaEnded" />
+                        <Image x:Name="FxImage" Stretch="Uniform" Visibility="Collapsed" />
+                        <Canvas x:Name="Overlay" ClipToBounds="True" MouseLeftButtonDown="OnOverlayDown" MouseMove="OnOverlayMove"
+                                MouseLeftButtonUp="OnOverlayUp" Background="Transparent" />
+                        <Border x:Name="FxBadge" Background="#CC071B24" BorderBrush="{StaticResource Accent}" BorderThickness="1" Padding="8,3"
+                                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" Visibility="Collapsed">
+                            <TextBlock Text="FX PREVIEW  ·  click to close" FontSize="11" Foreground="{StaticResource Accent}" FontFamily="{StaticResource HeadingFont}" />
+                        </Border>
+                        <Border x:Name="SpeedBadge" Background="#CC071B24" BorderBrush="{StaticResource Warning}" BorderThickness="1" Padding="8,3"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Visibility="Collapsed">
+                            <TextBlock x:Name="SpeedBadgeText" FontSize="12" Foreground="{StaticResource Warning}" FontFamily="{StaticResource HeadingFont}" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- Inspector -->
+                <Border Grid.Column="2" Background="{StaticResource Bg1}" BorderBrush="{StaticResource Separator}" BorderThickness="1">
+                    <DockPanel>
+                        <UniformGrid DockPanel.Dock="Top" Columns="6" Margin="6,6,6,0">
+                            <RadioButton x:Name="TabAudio" Style="{StaticResource Chip}" GroupName="Insp" Content="Audio" IsChecked="True" Checked="OnInspTab" Margin="0,0,3,0" Padding="4,6" />
+                            <RadioButton x:Name="TabEdit" Style="{StaticResource Chip}" GroupName="Insp" Content="Speed" Checked="OnInspTab" Margin="0,0,3,0" Padding="4,6" />
+                            <RadioButton x:Name="TabLook" Style="{StaticResource Chip}" GroupName="Insp" Content="Look" Checked="OnInspTab" Margin="0,0,3,0" Padding="4,6" />
+                            <RadioButton x:Name="TabText" Style="{StaticResource Chip}" GroupName="Insp" Content="Text" Checked="OnInspTab" Margin="0,0,3,0" Padding="4,6" />
+                            <RadioButton x:Name="TabFormat" Style="{StaticResource Chip}" GroupName="Insp" Content="Frame" Checked="OnInspTab" Margin="0,0,3,0" Padding="4,6" />
+                            <RadioButton x:Name="TabExport" Style="{StaticResource Chip}" GroupName="Insp" Content="Export" Checked="OnInspTab" Margin="0" Padding="4,6" />
+                        </UniformGrid>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <Grid Margin="14,12,14,14">
+
+                                <!-- AUDIO -->
+                                <StackPanel x:Name="PanelAudio">
+                                    <TextBlock Text="TRACK MIXER" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock Style="{StaticResource Dim}" Margin="0,0,0,10"
+                                               Text="Every recorded source is its own track. Turn Discord down, the game up, mute your mic - it only changes the export." />
+                                    <ItemsControl x:Name="MixerList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{StaticResource Bg3}" BorderBrush="{StaticResource Separator}" BorderThickness="1" Padding="10,8" Margin="0,0,0,8">
+                                                    <StackPanel>
+                                                        <DockPanel>
+                                                            <ToggleButton DockPanel.Dock="Right" Style="{StaticResource ChipToggle}" Content="S" Margin="4,0,0,0" Padding="9,3"
+                                                                          IsChecked="{Binding Solo, Mode=OneWay}" Click="OnSolo" Tag="{Binding}" ToolTip="Solo - hear only this" />
+                                                            <ToggleButton DockPanel.Dock="Right" Style="{StaticResource ChipToggle}" Content="M" Margin="4,0,0,0" Padding="9,3"
+                                                                          IsChecked="{Binding Muted, Mode=OneWay}" Click="OnMute" Tag="{Binding}" ToolTip="Mute" />
+                                                            <Rectangle Width="4" Height="18" Fill="{Binding Brush}" Margin="0,0,8,0" />
+                                                            <TextBlock Text="{Binding Name}" FontFamily="{StaticResource HeadingFont}" Foreground="{StaticResource Text}" VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </DockPanel>
+                                                        <DockPanel Margin="0,6,0,0">
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding VolumeText}" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" VerticalAlignment="Center" />
+                                                            <TextBlock Text="&#xE767;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource TextDim}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                            <Slider Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" SmallChange="0.05" LargeChange="0.1"
+                                                                    PreviewMouseLeftButtonDown="OnSliderGrab" Tag="{Binding}" />
+                                                        </DockPanel>
+                                                        <DockPanel Margin="0,4,0,0">
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding OffsetText}" Style="{StaticResource Mono}" Width="60" TextAlignment="Right" VerticalAlignment="Center" FontSize="11" />
+                                                            <TextBlock Text="Sync" Style="{StaticResource Dim}" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0" Width="26" />
+                                                            <Slider Minimum="-0.5" Maximum="0.5" Value="{Binding Offset, Mode=TwoWay}" SmallChange="0.01" LargeChange="0.05"
+                                                                    PreviewMouseLeftButtonDown="OnSliderGrab" ToolTip="Nudge this track earlier/later" />
+                                                        </DockPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock x:Name="NoAudioText" Style="{StaticResource Dim}" Text="This clip has no audio." Visibility="Collapsed" />
+                                    <DockPanel Margin="0,8,0,0">
+                                        <TextBlock Text="Preview volume" Style="{StaticResource Dim}" VerticalAlignment="Center" Width="100" />
+                                        <Slider x:Name="PreviewVolume" Minimum="0" Maximum="1.5" Value="1" ValueChanged="OnPreviewVolume" />
+                                    </DockPanel>
+                                </StackPanel>
+
+                                <!-- SPEED / EDIT -->
+                                <StackPanel x:Name="PanelEdit" Visibility="Collapsed">
+                                    <TextBlock Text="SELECTED PIECE" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock x:Name="SegInfo" Style="{StaticResource Body}" Foreground="{StaticResource Label}" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button Content="Split here" Click="OnSplit" />
+                                        <Button x:Name="CutBtn" Content="Cut piece" Margin="6,0,0,0" Click="OnToggleCut" />
+                                    </StackPanel>
+                                    <TextBlock Text="SPEED (SLOW-MO / FAST)" Style="{StaticResource SectionLabel}" Margin="0,16,0,6" />
+                                    <WrapPanel x:Name="SpeedChips" />
+                                    <TextBlock Style="{StaticResource Dim}" Margin="0,4,0,0"
+                                               Text="Tip: split around your best moment, then give just that piece 0.25x for a slow-mo replay. Audio pitch stays natural in the export." />
+                                    <TextBlock Text="FADES" Style="{StaticResource SectionLabel}" Margin="0,16,0,6" />
+                                    <DockPanel>
+                                        <TextBlock x:Name="FadeInText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Fade in" Style="{StaticResource Dim}" Width="70" VerticalAlignment="Center" />
+                                        <Slider x:Name="FadeInSlider" Minimum="0" Maximum="3" SmallChange="0.1" ValueChanged="OnFadeChanged" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock x:Name="FadeOutText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Fade out" Style="{StaticResource Dim}" Width="70" VerticalAlignment="Center" />
+                                        <Slider x:Name="FadeOutSlider" Minimum="0" Maximum="3" SmallChange="0.1" ValueChanged="OnFadeChanged" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                </StackPanel>
+
+                                <!-- LOOK -->
+                                <StackPanel x:Name="PanelLook" Visibility="Collapsed">
+                                    <TextBlock Text="COLOR LOOK" Style="{StaticResource SectionLabel}" />
+                                    <WrapPanel x:Name="LookChips" />
+                                    <TextBlock Text="ADJUST" Style="{StaticResource SectionLabel}" Margin="0,14,0,6" />
+                                    <DockPanel>
+                                        <TextBlock x:Name="BrightText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Brightness" Style="{StaticResource Dim}" Width="80" VerticalAlignment="Center" />
+                                        <Slider x:Name="BrightSlider" Minimum="-0.3" Maximum="0.3" SmallChange="0.01" ValueChanged="OnLookSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock x:Name="ContrastText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Contrast" Style="{StaticResource Dim}" Width="80" VerticalAlignment="Center" />
+                                        <Slider x:Name="ContrastSlider" Minimum="0.5" Maximum="1.6" SmallChange="0.01" ValueChanged="OnLookSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock x:Name="SatText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Saturation" Style="{StaticResource Dim}" Width="80" VerticalAlignment="Center" />
+                                        <Slider x:Name="SatSlider" Minimum="0" Maximum="2" SmallChange="0.01" ValueChanged="OnLookSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <CheckBox x:Name="VignetteBox" Style="{StaticResource Switch}" Content="Vignette" Margin="0,12,0,0" Click="OnLookToggle" />
+                                    <CheckBox x:Name="SharpenBox" Style="{StaticResource Switch}" Content="Sharpen" Margin="0,8,0,0" Click="OnLookToggle" />
+                                    <Button Content="Preview this frame with effects" Margin="0,14,0,0" Click="OnFxPreview" />
+                                </StackPanel>
+
+                                <!-- TEXT -->
+                                <StackPanel x:Name="PanelText" Visibility="Collapsed">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="+ Add text" Click="OnAddText" />
+                                        <TextBlock Text="TEXT OVERLAYS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center" Margin="0" />
+                                    </DockPanel>
+                                    <ListBox x:Name="TextList" Margin="0,8,0,0" MaxHeight="130" SelectionChanged="OnTextSelected" DisplayMemberPath="Text" />
+                                    <StackPanel x:Name="TextEditor" Margin="0,10,0,0">
+                                        <TextBox x:Name="TextContent" TextChanged="OnTextContent" AcceptsReturn="False" FontFamily="{StaticResource HeadingFont}" FontSize="15" />
+                                        <TextBlock Text="STYLE" Style="{StaticResource SectionLabel}" Margin="0,10,0,6" />
+                                        <WrapPanel x:Name="TextStyleChips" />
+                                        <TextBlock Text="COLOR" Style="{StaticResource SectionLabel}" Margin="0,6,0,6" />
+                                        <WrapPanel x:Name="TextColorChips" />
+                                        <DockPanel Margin="0,6,0,0">
+                                            <TextBlock Text="Size" Style="{StaticResource Dim}" Width="44" VerticalAlignment="Center" />
+                                            <Slider x:Name="TextSize" Minimum="0.03" Maximum="0.25" SmallChange="0.005" ValueChanged="OnTextSize" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                        </DockPanel>
+                                        <TextBlock Text="POSITION (or drag it in the preview)" Style="{StaticResource SectionLabel}" Margin="0,10,0,6" />
+                                        <WrapPanel x:Name="TextPosChips" />
+                                        <TextBlock x:Name="TextTimes" Style="{StaticResource Dim}" Margin="0,8,0,6" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Start at playhead" Click="OnTextStartHere" />
+                                            <Button Content="End at playhead" Margin="6,0,0,0" Click="OnTextEndHere" />
+                                        </StackPanel>
+                                        <Button Content="Delete text" Style="{StaticResource DangerButton}" HorizontalAlignment="Left" Margin="0,10,0,0" Click="OnDeleteText" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- FORMAT -->
+                                <StackPanel x:Name="PanelFormat" Visibility="Collapsed">
+                                    <TextBlock Text="ASPECT RATIO" Style="{StaticResource SectionLabel}" />
+                                    <WrapPanel x:Name="AspectChips" />
+                                    <TextBlock Style="{StaticResource Dim}" Margin="0,2,0,12" Text="9:16 makes a vertical video for TikTok / YouTube Shorts. Drag the frame in the preview to aim it." />
+                                    <DockPanel>
+                                        <TextBlock x:Name="ZoomText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Zoom" Style="{StaticResource Dim}" Width="70" VerticalAlignment="Center" />
+                                        <Slider x:Name="ZoomSlider" Minimum="1" Maximum="3" SmallChange="0.05" ValueChanged="OnFrameSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock Text="Left / right" Style="{StaticResource Dim}" Width="70" VerticalAlignment="Center" />
+                                        <Slider x:Name="PanXSlider" Minimum="0" Maximum="1" SmallChange="0.01" ValueChanged="OnFrameSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock Text="Up / down" Style="{StaticResource Dim}" Width="70" VerticalAlignment="Center" />
+                                        <Slider x:Name="PanYSlider" Minimum="0" Maximum="1" SmallChange="0.01" ValueChanged="OnFrameSlider" PreviewMouseLeftButtonDown="OnSliderGrab" />
+                                    </DockPanel>
+                                    <Button Content="Reset frame" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OnResetFrame" />
+                                </StackPanel>
+
+                                <!-- EXPORT -->
+                                <StackPanel x:Name="PanelExport" Visibility="Collapsed">
+                                    <TextBlock Text="PRESET" Style="{StaticResource SectionLabel}" />
+                                    <WrapPanel x:Name="ExportPresetChips" />
+                                    <TextBlock Text="RESOLUTION" Style="{StaticResource SectionLabel}" Margin="0,8,0,6" />
+                                    <WrapPanel x:Name="ExportResChips" />
+                                    <TextBlock Text="FRAME RATE" Style="{StaticResource SectionLabel}" Margin="0,8,0,6" />
+                                    <WrapPanel x:Name="ExportFpsChips" />
+                                    <TextBlock Text="SIZE" Style="{StaticResource SectionLabel}" Margin="0,8,0,6" />
+                                    <WrapPanel x:Name="ExportSizeChips" />
+                                    <DockPanel x:Name="ExportQualityRow" Margin="0,4,0,0">
+                                        <TextBlock x:Name="ExportQualityText" DockPanel.Dock="Right" Style="{StaticResource Mono}" Width="44" TextAlignment="Right" />
+                                        <TextBlock Text="Quality" Style="{StaticResource Dim}" Width="60" VerticalAlignment="Center" />
+                                        <Slider x:Name="ExportQuality" Minimum="30" Maximum="100" Value="80" ValueChanged="OnExportQuality" />
+                                    </DockPanel>
+                                    <TextBlock Text="AUDIO" Style="{StaticResource SectionLabel}" Margin="0,10,0,6" />
+                                    <WrapPanel x:Name="ExportAudioChips" />
+                                    <TextBlock Text="FILE NAME" Style="{StaticResource SectionLabel}" Margin="0,8,0,6" />
+                                    <TextBox x:Name="ExportName" />
+                                    <TextBlock x:Name="ExportSummary" Style="{StaticResource Dim}" Margin="0,10,0,0" />
+                                    <Button Style="{StaticResource AccentButton}" Margin="0,12,0,0" Padding="12,11" Click="OnExport">
+                                        <TextBlock Text="EXPORT VIDEO" FontSize="15" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- Transport -->
+            <Grid Grid.Row="2" Margin="0,8,0,6">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock x:Name="TimeText" Style="{StaticResource Mono}" FontSize="15" Foreground="{StaticResource Accent}" Text="0:00.0 / 0:00.0" />
+                    <TextBlock x:Name="OutLenText" Style="{StaticResource Dim}" Margin="16,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <Button Style="{StaticResource IconButton}" Content="&#xE892;" ToolTip="Go to start (Home)" Click="OnGoStart" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xE76B;" ToolTip="Previous frame (←)" Click="OnFrameBack" />
+                    <Button x:Name="PlayBtn" Style="{StaticResource AccentButton}" Width="54" Height="38" Padding="0" Click="OnPlayPause" ToolTip="Play / pause (Space)" Margin="6,0">
+                        <TextBlock x:Name="PlayIcon" Text="&#xE768;" FontFamily="{StaticResource IconFont}" FontSize="16" />
+                    </Button>
+                    <Button Style="{StaticResource IconButton}" Content="&#xE76C;" ToolTip="Next frame (→)" Click="OnFrameFwd" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xE893;" ToolTip="Go to end (End)" Click="OnGoEnd" />
+                    <ToggleButton x:Name="LoopBtn" Style="{StaticResource ChipToggle}" Content="&#xE8EE;" FontFamily="{StaticResource IconFont}" Margin="10,0,0,0"
+                                  Padding="10,6" ToolTip="Loop" VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE71E;" FontFamily="{StaticResource IconFont}" Foreground="{StaticResource TextDim}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <Slider x:Name="ZoomTimeline" Width="130" Minimum="0" Maximum="1" Value="0" ValueChanged="OnTimelineZoom" ToolTip="Timeline zoom (Ctrl + mouse wheel)" />
+                    <Button Content="Fit" Style="{StaticResource GhostButton}" Click="OnFit" Margin="4,0,0,0" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Timeline -->
+            <Border Grid.Row="3" BorderBrush="{StaticResource Separator}" BorderThickness="1" MaxHeight="330">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <e:TimelineControl x:Name="Timeline" />
+                </ScrollViewer>
+            </Border>
+            <ScrollBar Grid.Row="4" x:Name="TimelineScroll" Orientation="Horizontal" Margin="158,2,0,0" Scroll="OnTimelineScroll" />
+        </Grid>
+
+        <!-- ============================== EMPTY STATE ============================== -->
+        <Grid x:Name="EmptyRoot" Background="{StaticResource Bg0}">
+            <c:WaveBackground VerticalAlignment="Bottom" Height="320" Intensity="0.7" />
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="760">
+                <TextBlock Text="WAVE EDITOR" Style="{StaticResource H1}" FontSize="38" HorizontalAlignment="Center" />
+                <TextBlock Style="{StaticResource Body}" Foreground="{StaticResource Label}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,20"
+                           Text="Trim, cut, slow-mo, mix Discord and game audio separately, add glowing text, go vertical for Shorts and export straight to Discord's size limit." />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <Button Style="{StaticResource AccentButton}" Content="Pick a clip" Click="OnPickFromLibrary" Padding="18,9" />
+                    <Button Content="Open a video file…" Margin="10,0,0,0" Click="OnOpenFile" Padding="18,9" />
+                </StackPanel>
+                <ItemsControl x:Name="EmptyRecent" Margin="0,26,0,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><UniformGrid Columns="4" /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource GhostButton}" Padding="0" Margin="6" Click="OnEmptyRecent" Tag="{Binding}">
+                                <StackPanel Width="170">
+                                    <Border Height="96" Background="{StaticResource Bg3}" BorderBrush="{StaticResource Separator}" BorderThickness="1">
+                                        <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                    </Border>
+                                    <TextBlock Text="{Binding Title}" FontSize="11" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Grid>
+
+        <!-- ============================== BUSY / EXPORT OVERLAY ============================== -->
+        <Grid x:Name="BusyRoot" Background="#E6040F15" Visibility="Collapsed">
+            <c:WavePanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="460" Padding="24">
+                <StackPanel>
+                    <TextBlock x:Name="BusyTitle" Style="{StaticResource H2}" FontSize="20" Text="Loading…" />
+                    <TextBlock x:Name="BusyText" Style="{StaticResource Body}" Foreground="{StaticResource Label}" Margin="0,8,0,14" />
+                    <ProgressBar x:Name="BusyProgress" Maximum="1" IsIndeterminate="False" Height="8" />
+                    <TextBlock x:Name="BusyDetail" Style="{StaticResource Dim}" Margin="0,8,0,0" />
+                    <StackPanel x:Name="BusyButtons" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                        <Button x:Name="BusyCopy" Content="Copy for Discord" Click="OnBusyCopy" Visibility="Collapsed" />
+                        <Button x:Name="BusyShow" Content="Show in folder" Margin="8,0,0,0" Click="OnBusyShow" Visibility="Collapsed" />
+                        <Button x:Name="BusyPlay" Content="Play" Style="{StaticResource AccentButton}" Margin="8,0,0,0" Click="OnBusyPlay" Visibility="Collapsed" />
+                        <Button x:Name="BusyCancel" Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Click="OnBusyCancel" />
+                    </StackPanel>
+                </StackPanel>
+            </c:WavePanel>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,165 @@
+<UserControl x:Class="WaveClips.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:WaveClips.Controls">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="26,20,26,26">
+
+            <!-- ============ Hero ============ -->
+            <Grid Height="200">
+                <Border Background="{StaticResource CardGradient}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" ClipToBounds="True">
+                    <c:WaveBackground x:Name="HeroWaves" Intensity="1" />
+                </Border>
+                <Rectangle Width="6" Height="6" Fill="{StaticResource Accent}" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                <Rectangle Width="6" Height="6" Fill="{StaticResource Accent}" HorizontalAlignment="Right" VerticalAlignment="Top" />
+                <Rectangle Width="6" Height="6" Fill="{StaticResource Accent}" HorizontalAlignment="Left" VerticalAlignment="Bottom" />
+                <Rectangle Width="6" Height="6" Fill="{StaticResource Accent}" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
+                <Grid Margin="28,24">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="REPLAY BUFFER" Style="{StaticResource SectionLabel}" FontSize="12" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="BigState" Text="OFF" FontFamily="{StaticResource HeadingFont}" FontSize="44"
+                                       Foreground="{StaticResource Accent}" Effect="{StaticResource Glow}" />
+                            <CheckBox x:Name="BufferSwitch" Style="{StaticResource Switch}" Margin="22,6,0,0" VerticalAlignment="Center"
+                                      Click="OnBufferSwitch" ToolTip="Turn the replay buffer on/off" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding StatusText}" Style="{StaticResource Body}" Foreground="{StaticResource Label}" Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding ErrorText}" Style="{StaticResource Body}" Foreground="{StaticResource Danger}" Margin="0,6,0,0" FontSize="12"
+                                   MaxWidth="560" HorizontalAlignment="Left" />
+                        <Button x:Name="InstallFfmpegButton" Content="Install FFmpeg (one click)" Style="{StaticResource AccentButton}" HorizontalAlignment="Left"
+                                Margin="0,10,0,0" Click="OnInstallFfmpeg" Visibility="Collapsed" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Width="230">
+                        <Button Style="{StaticResource AccentButton}" Click="OnClip" Padding="12,14">
+                            <StackPanel>
+                                <TextBlock Text="SAVE CLIP" FontSize="18" HorizontalAlignment="Center" />
+                                <TextBlock x:Name="ClipHint" Text="F8" FontSize="11" Opacity="0.75" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="RecordBtn" Style="{StaticResource DangerButton}" Click="OnRecord" Padding="12,10" Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="10" Height="10" Fill="{StaticResource Danger}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                <TextBlock x:Name="RecordLabel" Text="START RECORDING" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock x:Name="SavingText" Text="Saving…" Style="{StaticResource Dim}" HorizontalAlignment="Center" Margin="0,8,0,0"
+                                   Visibility="{Binding IsSaving, Converter={StaticResource BoolToVis}}" Foreground="{StaticResource Warning}" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <!-- ============ Stat tiles ============ -->
+            <UniformGrid Columns="4" Margin="-6,16,-6,0">
+                <c:WavePanel x:Name="GameTile" Margin="6" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="GAME" Style="{StaticResource SectionLabel}" />
+                        <StackPanel Orientation="Horizontal">
+                            <Image x:Name="GameIcon" Width="26" Height="26" Margin="0,0,10,0" Source="{Binding GameIcon}" />
+                            <TextBlock Text="{Binding GameName}" Style="{StaticResource H2}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <TextBlock x:Name="GameSub" Style="{StaticResource Dim}" Margin="0,6,0,0" Text="Watching for your games" />
+                    </StackPanel>
+                </c:WavePanel>
+                <c:WavePanel Margin="6" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="CAPTURE" Style="{StaticResource SectionLabel}" />
+                        <TextBlock x:Name="CaptureMain" Style="{StaticResource H2}" Text="-" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="CaptureSub" Style="{StaticResource Dim}" Margin="0,6,0,0" Text="-" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </c:WavePanel>
+                <c:WavePanel Margin="6" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="ENCODER" Style="{StaticResource SectionLabel}" />
+                        <TextBlock x:Name="EncoderMain" Style="{StaticResource H2}" Text="-" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="EncoderSub" Style="{StaticResource Dim}" Margin="0,6,0,0" Text="-" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </c:WavePanel>
+                <c:WavePanel Margin="6" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="BUFFER" Style="{StaticResource SectionLabel}" />
+                        <TextBlock x:Name="BufferMain" Style="{StaticResource H2}" Text="-" />
+                        <TextBlock x:Name="BufferSub" Style="{StaticResource Dim}" Margin="0,6,0,0" Text="-" />
+                    </StackPanel>
+                </c:WavePanel>
+            </UniformGrid>
+
+            <!-- ============ Audio + recent ============ -->
+            <Grid Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="5*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="4*" />
+                </Grid.ColumnDefinitions>
+                <c:WavePanel Header="AUDIO TRACKS">
+                    <c:WavePanel.HeaderContent>
+                        <Button Content="Configure" Style="{StaticResource GhostButton}" Click="OnConfigureAudio" />
+                    </c:WavePanel.HeaderContent>
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Dim}" Margin="0,0,0,10"
+                                   Text="Every clip gets these as separate tracks, so you can mix Discord and game sound later in the editor." />
+                        <ItemsControl x:Name="TrackList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="4" />
+                                            <ColumnDefinition Width="170" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Rectangle Fill="{Binding Brush}" />
+                                        <StackPanel Grid.Column="1" Margin="10,0,8,0">
+                                            <TextBlock Text="{Binding Name}" FontFamily="{StaticResource HeadingFont}" Foreground="{StaticResource Text}" />
+                                            <TextBlock Text="{Binding Status}" Style="{StaticResource Dim}" FontSize="11" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        </StackPanel>
+                                        <c:LevelMeter Grid.Column="2" Height="10" Level="{Binding Level}" Color="{Binding Brush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </c:WavePanel>
+
+                <c:WavePanel Grid.Column="2" Header="RECENT CLIPS">
+                    <c:WavePanel.HeaderContent>
+                        <Button Content="See all" Style="{StaticResource GhostButton}" Click="OnSeeAll" />
+                    </c:WavePanel.HeaderContent>
+                    <Grid>
+                        <TextBlock x:Name="NoClips" Style="{StaticResource Dim}" Text="No clips yet. Hit your clip key while playing!" />
+                        <ItemsControl x:Name="RecentList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource GhostButton}" Padding="0" Margin="0,0,0,8" HorizontalContentAlignment="Stretch"
+                                            Click="OnRecentClick" Tag="{Binding}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="112" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Height="63" Background="{StaticResource Bg3}" BorderBrush="{StaticResource Separator}" BorderThickness="1">
+                                                <Grid>
+                                                    <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                                    <Border Background="#CC000000" HorizontalAlignment="Right" VerticalAlignment="Bottom" Padding="4,1" Margin="3">
+                                                        <TextBlock Text="{Binding DurationText}" FontSize="10" Foreground="White" />
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" Margin="10,2,0,0" HorizontalAlignment="Left">
+                                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" FontSize="12" />
+                                                <TextBlock Text="{Binding DateText}" Style="{StaticResource Dim}" FontSize="11" />
+                                                <TextBlock Text="{Binding Game}" Foreground="{StaticResource Accent}" FontSize="11" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </c:WavePanel>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

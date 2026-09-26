@@ -1,0 +1,56 @@
+name: Build WaveClips
+on:
+  push:
+    paths:
+      - "waveclips/**"
+      - ".github/workflows/waveclips.yml"
+  pull_request:
+    paths:
+      - "waveclips/**"
+  workflow_dispatch:
+
+jobs:
+  pipeline-tests:
+    # Runs the exact FFmpeg command lines WaveClips generates (capture segments, clip saving,
+    # separate audio tracks, editor exports) against a real FFmpeg build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Get FFmpeg
+        run: |
+          curl -sSL -o ff.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          tar xf ff.tar.xz
+          echo "FFMPEG_EXE=$PWD/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg" >> "$GITHUB_ENV"
+          sudo apt-get install -y fonts-dejavu-core >/dev/null || true
+      - name: Run pipeline tests
+        run: dotnet run -c Release --project waveclips/Tests/WaveClips.PipelineTests
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Publish WaveClips.exe (self-contained, single file)
+        run: >
+          dotnet publish waveclips/WaveClips/WaveClips.csproj -c Release -r win-x64
+          --self-contained true -p:PublishSingleFile=true -o out/WaveClips
+      - name: Bundle FFmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          $ff = Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $ff.FullName out/WaveClips/
+          Copy-Item (Join-Path $ff.DirectoryName "ffprobe.exe") out/WaveClips/
+          Copy-Item waveclips/README.md out/WaveClips/README.md
+          Get-ChildItem out/WaveClips | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WaveClips-win-x64
+          path: out/WaveClips
+          if-no-files-found: error
