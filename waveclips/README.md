@@ -125,6 +125,15 @@ The pipeline tests cover:
 - That **each audio track contains only its own source**.
 - Editor exports with cuts, speed ramps, per-track volume/offset, text, 9:16 crop, looks, fades, size targets and GIF.
 
+The Windows CI job also runs **`WaveClips.exe --selftest <folder>`**. With `WAVECLIPS_HOME` pointing at a scratch folder, it:
+
+- Screenshots every page.
+- Starts the replay buffer with both capture methods.
+- Saves a clip and checks all its named audio tracks.
+- Records, shows the popup, and opens and exports a clip in the editor.
+
+The report, log and screenshots are uploaded as the **WaveClips-selftest** artifact.
+
 | Folder | What's inside |
 | --- | --- |
 | `WaveClips/Core` | Settings, FFmpeg, encoders, monitors, game detection, hotkeys, clip library |

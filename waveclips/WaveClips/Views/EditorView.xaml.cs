@@ -156,7 +156,7 @@ namespace WaveClips.Views
                 EmptyRoot.Visibility = Visibility.Collapsed;
                 HideBusy();
                 RefreshAll();
-                await Dispatcher.InvokeAsync(() => { Timeline.FitToView(); UpdateZoomSlider(); }, DispatcherPriority.Loaded);
+                await Dispatcher.InvokeAsync(() => { Timeline.FitToView(); UpdateZoomSlider(); FitToolbar(); }, DispatcherPriority.Loaded);
                 Focus();
                 return true;
             }
@@ -1017,10 +1017,48 @@ namespace WaveClips.Views
             PanelText.Visibility = TabText.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
             PanelFormat.Visibility = TabFormat.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
             PanelExport.Visibility = TabExport.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            if (TabText.IsChecked == true && SelectedText == null && _p != null && _p.Texts.Count > 0)
+            {
+                RefreshTexts(_p.Texts[0]);
+                Timeline.SelectText(_p.Texts[0]);
+            }
             RenderOverlay();
         }
 
         private void OnExportTab(object sender, RoutedEventArgs e) => TabExport.IsChecked = true;
+
+        /// <summary>Keeps the toolbar on one line: shorten the title first, then drop button labels (icons + tooltips stay).</summary>
+        private void OnToolbarSize(object sender, SizeChangedEventArgs e) => FitToolbar();
+
+        private void FitToolbar()
+        {
+            double avail = ToolBarRow.ActualWidth - ExportButton.ActualWidth - 16;
+            if (avail <= 0) return;
+            var labels = FindLabels(ToolBarTools).ToList();
+            double Need()
+            {
+                ToolBarTools.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                return ToolBarTools.DesiredSize.Width;
+            }
+            foreach (var l in labels) l.Visibility = Visibility.Visible;
+            ClipTitle.MaxWidth = 360;
+            if (Need() <= avail) return;
+            ClipTitle.MaxWidth = 220;
+            if (Need() <= avail) return;
+            foreach (var l in labels) l.Visibility = Visibility.Collapsed;
+            if (Need() <= avail) return;
+            ClipTitle.MaxWidth = 110;
+        }
+
+        private static IEnumerable<TextBlock> FindLabels(DependencyObject root)
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                if (c is TextBlock tb && (tb.Tag as string) == "label") yield return tb;
+                foreach (var x in FindLabels(c)) yield return x;
+            }
+        }
 
         // =====================================================================================
         // Export

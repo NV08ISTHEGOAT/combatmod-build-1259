@@ -15,15 +15,15 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Toolbar -->
-            <DockPanel Margin="0,0,0,8">
+            <!-- Toolbar (labels collapse to icons on narrow windows) -->
+            <DockPanel x:Name="ToolBarRow" Margin="0,0,0,8" SizeChanged="OnToolbarSize">
                 <Button DockPanel.Dock="Right" x:Name="ExportButton" Style="{StaticResource AccentButton}" Click="OnExportTab" Padding="18,8">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE898;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0" />
                         <TextBlock Text="EXPORT" />
                     </StackPanel>
                 </Button>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel x:Name="ToolBarTools" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButton}" Content="&#xE8E5;" ToolTip="Open another clip" Click="OnOpenOther" />
                     <TextBlock x:Name="ClipTitle" Style="{StaticResource H2}" VerticalAlignment="Center" Margin="6,0,18,0" MaxWidth="360" TextTrimming="CharacterEllipsis" />
                     <Rectangle Width="1" Height="22" Fill="{StaticResource Separator}" Margin="0,0,8,0" />
@@ -31,22 +31,22 @@
                     <Button Style="{StaticResource IconButton}" x:Name="RedoBtn" Content="&#xE7A6;" ToolTip="Redo (Ctrl+Y)" Click="OnRedo" />
                     <Rectangle Width="1" Height="22" Fill="{StaticResource Separator}" Margin="8,0" />
                     <Button Style="{StaticResource GhostButton}" ToolTip="Split at playhead (S)" Click="OnSplit">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C6;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Split" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C6;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Split" Tag="label" /></StackPanel>
                     </Button>
                     <Button Style="{StaticResource GhostButton}" ToolTip="Cut / restore the selected piece (Delete)" Click="OnToggleCut">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Cut piece" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Cut piece" Tag="label" /></StackPanel>
                     </Button>
                     <Button Style="{StaticResource GhostButton}" ToolTip="Trim start to playhead (I)" Click="OnTrimIn">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE892;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim in" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE892;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim in" Tag="label" /></StackPanel>
                     </Button>
                     <Button Style="{StaticResource GhostButton}" ToolTip="Trim end to playhead (O)" Click="OnTrimOut">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE893;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim out" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE893;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Trim out" Tag="label" /></StackPanel>
                     </Button>
                     <Button Style="{StaticResource GhostButton}" ToolTip="Add text at playhead (T)" Click="OnAddText">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8D2;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Text" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8D2;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="Text" Tag="label" /></StackPanel>
                     </Button>
                     <Button Style="{StaticResource GhostButton}" ToolTip="Render this frame with all effects (F)" Click="OnFxPreview">
-                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="FX preview" /></StackPanel>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="{StaticResource IconFont}" Margin="0,0,6,0" VerticalAlignment="Center" /><TextBlock Text="FX preview" Tag="label" /></StackPanel>
                     </Button>
                 </StackPanel>
             </DockPanel>
