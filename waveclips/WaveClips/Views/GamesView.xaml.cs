@@ -70,7 +70,7 @@ namespace WaveClips.Views
         private void OnRemove(object sender, RoutedEventArgs e)
         {
             if (((FrameworkElement)sender).Tag is GameProfile g &&
-                MessageBox.Show($"Stop watching for {g.Name}?", "WaveClips", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+                Msg.Show($"Stop watching for {g.Name}?", "WaveClips", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
                 AppHost.Settings.Games.Remove(g);
         }
     }

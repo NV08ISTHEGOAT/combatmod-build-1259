@@ -98,6 +98,8 @@ namespace WaveClips
             if (view is IPage p) p.OnShown();
         }
 
+        public EditorView Editor => _editor ??= new EditorView();
+
         /// <summary>Opens a clip in the editor page.</summary>
         public void OpenInEditor(string path)
         {

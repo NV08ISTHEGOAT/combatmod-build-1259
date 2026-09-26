@@ -54,3 +54,19 @@ jobs:
           name: WaveClips-win-x64
           path: out/WaveClips
           if-no-files-found: error
+      - name: Self-test on Windows (real capture, clip, editor export, UI screenshots)
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $env:WAVECLIPS_HOME = "$PWD\selftest-home"
+          New-Item -ItemType Directory -Force selftest | Out-Null
+          $p = Start-Process -FilePath "out\WaveClips\WaveClips.exe" -ArgumentList "--selftest", "`"$PWD\selftest`"" -PassThru -Wait
+          if (Test-Path selftest\report.txt) { Get-Content selftest\report.txt } else { Write-Host "no report written" }
+          if (Test-Path selftest-home\local\waveclips.log) { Copy-Item selftest-home\local\waveclips.log selftest\ }
+          Write-Host "exit code: $($p.ExitCode)"
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: WaveClips-selftest
+          path: selftest

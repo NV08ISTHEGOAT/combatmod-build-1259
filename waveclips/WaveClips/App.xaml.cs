@@ -30,12 +30,26 @@ namespace WaveClips
 
             base.OnStartup(e);
             Log.Info("WaveClips starting");
+            int st = Array.IndexOf(e.Args, "--selftest");
             AppHost.Initialize();
+            if (st >= 0)
+            {
+                // Unattended test run: never auto-start capture or hide the window.
+                AppHost.Settings.AutoStart = AutoStartMode.Manual;
+                AppHost.Settings.StartMinimized = false;
+            }
 
             var win = new MainWindow();
             MainWindow = win;
-            bool minimized = AppHost.Settings.StartMinimized || e.Args.Contains("--minimized");
+            bool minimized = st < 0 && (AppHost.Settings.StartMinimized || e.Args.Contains("--minimized"));
             if (!minimized) win.Show();
+
+            if (st >= 0)
+            {
+                var outDir = st + 1 < e.Args.Length ? e.Args[st + 1] : System.IO.Path.Combine(Paths.LocalData, "selftest");
+                _ = RunSelfTestAsync(win, outDir);
+                return;
+            }
 
             // Bring the window forward when a second copy is launched.
             var t = new Thread(() =>
@@ -48,20 +62,33 @@ namespace WaveClips
             _ = AppHost.StartAsync();
         }
 
+        private static async Task RunSelfTestAsync(MainWindow win, string outDir)
+        {
+            int failures;
+            try
+            {
+                await AppHost.StartAsync();
+                failures = await SelfTest.RunAsync(win, outDir);
+            }
+            catch (Exception ex) { Log.Error("Self-test", ex); failures = 1; }
+            Quit(failures == 0 ? 0 : 1);
+        }
+
         private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
         {
             Log.Error("UI exception", e.Exception);
-            MessageBox.Show("Something went wrong:\n\n" + e.Exception.Message + "\n\nDetails were written to " + Paths.LogFile,
+            if (SelfTest.Active) { SelfTest.RecordException(e.Exception); e.Handled = true; return; }
+            Msg.Show("Something went wrong:\n\n" + e.Exception.Message + "\n\nDetails were written to " + Paths.LogFile,
                 "WaveClips", MessageBoxButton.OK, MessageBoxImage.Warning);
             e.Handled = true;
         }
 
-        public static async void Quit()
+        public static async void Quit(int exitCode = 0)
         {
             (Current.MainWindow as MainWindow)?.PrepareExit();
             try { await AppHost.ShutdownAsync(); }
             catch (Exception ex) { Log.Error("Shutdown", ex); }
-            Current.Shutdown();
+            Current.Shutdown(exitCode);
         }
     }
 }

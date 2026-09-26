@@ -80,6 +80,16 @@ namespace WaveClips.Capture
         /// <summary>Whether the replay buffer is wanted (vs. only running for a recording).</summary>
         public bool BufferEnabled { get => _bufferEnabled; private set => Set(ref _bufferEnabled, value); }
 
+        /// <summary>Diagnostics for the self-test / log.</summary>
+        public string DebugInfo
+        {
+            get
+            {
+                var s = _session;
+                return s == null ? "no session" : $"level={s.Level} marker={s.MarkerKind} encoder={s.EffectiveEncoder.Id} fps={s.EncodeFps:0.#} dropped={s.DroppedFrames}";
+            }
+        }
+
         private static void Ui(Action a)
         {
             var d = Application.Current?.Dispatcher;

@@ -335,7 +335,7 @@ namespace WaveClips.Views
 
         private void OnAddTrack(object sender, RoutedEventArgs e)
         {
-            if (_s.AudioTracks.Count >= 6) { MessageBox.Show("Up to 6 tracks are supported.", "WaveClips"); return; }
+            if (_s.AudioTracks.Count >= 6) { Msg.Show("Up to 6 tracks are supported.", "WaveClips"); return; }
             var cfg = new AudioTrackConfig
             {
                 Name = "New track",
@@ -350,7 +350,7 @@ namespace WaveClips.Views
         private void OnRemoveTrack(object sender, RoutedEventArgs e)
         {
             if (((FrameworkElement)sender).Tag is not TrackVm vm) return;
-            if (MessageBox.Show($"Remove the track \"{vm.Config.Name}\"?", "WaveClips", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            if (Msg.Show($"Remove the track \"{vm.Config.Name}\"?", "WaveClips", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
             _s.AudioTracks.Remove(vm.Config);
             _tracks.Remove(vm);
             AppHost.Audio.ReloadTracks();

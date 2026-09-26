@@ -99,12 +99,19 @@ namespace WaveClips.Views
             EmptyRecent.ItemsSource = AppHost.Library.Items.Take(8).ToList();
         }
 
-        public async void Load(string path)
+        public void Load(string path) => _ = LoadAsync(path);
+
+        /// <summary>True once a clip is open in the editor.</summary>
+        public bool HasClip => _p != null;
+        /// <summary>True once the video preview (MediaElement) has opened the clip.</summary>
+        public bool PreviewReady => _mediaReady;
+
+        public async Task<bool> LoadAsync(string path)
         {
             if (!FFmpeg.Available)
             {
-                MessageBox.Show("Install FFmpeg first (Settings → General).", "WaveClips");
-                return;
+                Msg.Show("Install FFmpeg first (Settings → General).", "WaveClips");
+                return false;
             }
             Pause();
             SaveProject();
@@ -117,7 +124,7 @@ namespace WaveClips.Views
                 var info = await MediaProbe.ProbeAsync(path, cts.Token);
                 if (info.Width <= 0 || info.Duration <= 0) throw new Exception("This file has no video WaveClips can edit.");
                 var media = await EditorMedia.PrepareAsync(path, info, new Progress<string>(s => BusyText.Text = s), cts.Token);
-                if (cts.IsCancellationRequested) return;
+                if (cts.IsCancellationRequested) return false;
 
                 EditProject p = null;
                 var pf = EditorMedia.ProjectFileFor(path);
@@ -151,13 +158,15 @@ namespace WaveClips.Views
                 RefreshAll();
                 await Dispatcher.InvokeAsync(() => { Timeline.FitToView(); UpdateZoomSlider(); }, DispatcherPriority.Loaded);
                 Focus();
+                return true;
             }
-            catch (OperationCanceledException) { HideBusy(); }
+            catch (OperationCanceledException) { HideBusy(); return false; }
             catch (Exception ex)
             {
                 Log.Error("Editor load", ex);
                 HideBusy();
-                MessageBox.Show(ex.Message, "Couldn't open clip");
+                Msg.Show(ex.Message, "Couldn't open clip");
+                return false;
             }
         }
 
@@ -179,7 +188,7 @@ namespace WaveClips.Views
 
         private async void OnMediaFailed(object sender, ExceptionRoutedEventArgs e)
         {
-            if (_usingProxy || _p == null) { MessageBox.Show("Preview failed: " + e.ErrorException?.Message, "WaveClips"); return; }
+            if (_usingProxy || _p == null) { Msg.Show("Preview failed: " + e.ErrorException?.Message, "WaveClips"); return; }
             // Windows can't decode this codec (e.g. HEVC without the Store extension) - preview a converted copy instead.
             _usingProxy = true;
             ShowBusy("Preparing preview", "Converting for preview…", cancellable: false);
@@ -191,7 +200,7 @@ namespace WaveClips.Views
                 Player.Play();
                 Player.Pause();
             }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "WaveClips"); }
+            catch (Exception ex) { Msg.Show(ex.Message, "WaveClips"); }
             finally { HideBusy(); }
         }
 
@@ -380,7 +389,7 @@ namespace WaveClips.Views
             if (i < 0 || i >= _p.Segments.Count) i = _p.Segments.IndexOf(_p.SegmentAt(CurrentTime));
             if (i < 0) return;
             var s = _p.Segments[i];
-            if (!s.Removed && _p.Kept.Count() <= 1 && _p.Kept.Contains(s)) { MessageBox.Show("That's the last piece - split it first.", "WaveClips"); return; }
+            if (!s.Removed && _p.Kept.Count() <= 1 && _p.Kept.Contains(s)) { Msg.Show("That's the last piece - split it first.", "WaveClips"); return; }
             BeginEdit();
             s.Removed = !s.Removed;
             _p.Normalize();
@@ -784,7 +793,7 @@ namespace WaveClips.Views
             FxBadge.Visibility = Visibility.Visible;
             ((TextBlock)FxBadge.Child).Text = "Rendering…";
             var r = await FFmpeg.RunAsync(plan.Args, workDir: plan.WorkDir);
-            if (!r.Success) { FxBadge.Visibility = Visibility.Collapsed; MessageBox.Show(r.StdErrTail, "Preview failed"); return; }
+            if (!r.Success) { FxBadge.Visibility = Visibility.Collapsed; Msg.Show(r.StdErrTail, "Preview failed"); return; }
             FxImage.Source = ClipLibrary.LoadImage(png);
             FxImage.Visibility = Visibility.Visible;
             ((TextBlock)FxBadge.Child).Text = "FX PREVIEW  ·  click the video to close";
@@ -1014,9 +1023,13 @@ namespace WaveClips.Views
         // =====================================================================================
         // Export
         // =====================================================================================
-        private async void OnExport(object sender, RoutedEventArgs e)
+        private async void OnExport(object sender, RoutedEventArgs e) => await ExportAsync();
+
+        /// <summary>Exports with the current export settings. Returns the output file, or null on failure/cancel.</summary>
+        public async Task<string> ExportAsync(string preset = null)
         {
-            if (_p == null) return;
+            if (_p == null) return null;
+            if (preset != null) ApplyExportPreset(preset);
             Pause();
             SaveProject();
             var dir = System.IO.Path.GetDirectoryName(_p.SourcePath)!;
@@ -1039,7 +1052,7 @@ namespace WaveClips.Views
 
             ExportPlan plan;
             try { plan = ExportBuilder.Build(_p, opts); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Export"); return; }
+            catch (Exception ex) { Msg.Show(ex.Message, "Export"); return null; }
 
             _exportCts = new CancellationTokenSource();
             ShowBusy("Exporting", System.IO.Path.GetFileName(output), cancellable: true);
@@ -1080,8 +1093,9 @@ namespace WaveClips.Views
                 BusyCopy.Visibility = BusyShow.Visibility = BusyPlay.Visibility = Visibility.Visible;
                 BusyCancel.Content = "Close";
                 AppHost.Notifier.Show(Capture.NotifyKind.Clip, "Export done!", System.IO.Path.GetFileName(output));
+                return output;
             }
-            catch (OperationCanceledException) { HideBusy(); TryDelete(output); }
+            catch (OperationCanceledException) { HideBusy(); TryDelete(output); return null; }
             catch (Exception ex)
             {
                 Log.Error("Export failed", ex);
@@ -1089,6 +1103,7 @@ namespace WaveClips.Views
                 BusyTitle.Text = "Export failed";
                 BusyText.Text = ex.Message.Length > 600 ? ex.Message.Substring(ex.Message.Length - 600) : ex.Message;
                 BusyCancel.Content = "Close";
+                return null;
             }
             finally
             {
@@ -1098,6 +1113,32 @@ namespace WaveClips.Views
         }
 
         private static void TryDelete(string f) { try { if (File.Exists(f)) File.Delete(f); } catch { } }
+
+        /// <summary>Applies a typical edit (cut, slow-mo, text, look) - used by the self-test.</summary>
+        internal void ApplyDemoEdit()
+        {
+            if (_p == null) return;
+            BeginEdit();
+            double d = _p.Duration;
+            _p.Split(d * 0.25);
+            _p.Split(d * 0.45);
+            _p.Split(d * 0.75);
+            _p.Segments[1].Removed = true;
+            _p.Segments[^1].Speed = 0.5;
+            _p.Texts.Add(new TextOverlay { Text = "WAVECLIPS 100%", Start = 0, End = d * 0.6 });
+            _p.Look = ColorLook.Wave;
+            _p.FadeOut = 0.5;
+            Timeline.SelectSegment(_p.Segments.Count - 1);
+            RefreshAll();
+            Edited();
+        }
+
+        internal void CloseBusyOverlay() => HideBusy();
+        internal void ShowInspectorTab(string name)
+        {
+            var tab = name switch { "Speed" => TabEdit, "Look" => TabLook, "Text" => TabText, "Frame" => TabFormat, "Export" => TabExport, _ => TabAudio };
+            tab.IsChecked = true;
+        }
 
         // =====================================================================================
         // Busy overlay

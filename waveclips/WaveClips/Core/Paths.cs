@@ -5,8 +5,13 @@ namespace WaveClips.Core
 {
     public static class Paths
     {
-        public static string AppData { get; } = Ensure(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WaveClips"));
-        public static string LocalData { get; } = Ensure(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WaveClips"));
+        /// <summary>Optional override (portable installs / the self-test): keeps all data under one folder.</summary>
+        private static readonly string Home = Environment.GetEnvironmentVariable("WAVECLIPS_HOME");
+
+        public static string AppData { get; } = Ensure(Home != null ? Path.Combine(Home, "roaming")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WaveClips"));
+        public static string LocalData { get; } = Ensure(Home != null ? Path.Combine(Home, "local")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WaveClips"));
         public static string SettingsFile => Path.Combine(AppData, "settings.json");
         public static string LibraryFile => Path.Combine(AppData, "library.json");
         public static string LogFile => Path.Combine(LocalData, "waveclips.log");
@@ -15,7 +20,8 @@ namespace WaveClips.Core
         public static string Temp => Ensure(Path.Combine(LocalData, "temp"));
         public static string FfmpegDir => Path.Combine(LocalData, "ffmpeg");
         public static string DefaultBufferFolder => Path.Combine(LocalData, "buffer");
-        public static string DefaultClipFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "WaveClips");
+        public static string DefaultClipFolder => Home != null ? Path.Combine(Home, "clips")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "WaveClips");
         public static string AppDir => AppContext.BaseDirectory;
 
         public static string Ensure(string dir)

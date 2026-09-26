@@ -160,9 +160,9 @@ namespace WaveClips.Views
             if (name == null || name == c.Title) return;
             try
             {
-                if (!AppHost.Library.Rename(c, name)) MessageBox.Show("That name is taken or invalid.", "WaveClips");
+                if (!AppHost.Library.Rename(c, name)) Msg.Show("That name is taken or invalid.", "WaveClips");
             }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Rename failed"); }
+            catch (Exception ex) { Msg.Show(ex.Message, "Rename failed"); }
         }
 
         private void OnMenuFavorite(object sender, RoutedEventArgs e)
@@ -173,9 +173,9 @@ namespace WaveClips.Views
         private void OnMenuDelete(object sender, RoutedEventArgs e)
         {
             if (ItemOf(sender) is not ClipItem c) return;
-            if (MessageBox.Show($"Move \"{c.Title}\" to the Recycle Bin?", "Delete clip", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            if (Msg.Show($"Move \"{c.Title}\" to the Recycle Bin?", "Delete clip", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             try { AppHost.Library.Delete(c); UpdateHeader(); BuildFilters(); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Delete failed"); }
+            catch (Exception ex) { Msg.Show(ex.Message, "Delete failed"); }
         }
     }
 }

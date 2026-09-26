@@ -52,6 +52,8 @@ namespace WaveClips.Capture
         public bool HasExited => _proc == null || _proc.HasExited;
         public int ExitCode => _proc != null && _proc.HasExited ? _proc.ExitCode : 0;
         public string ErrorSummary { get; private set; } = "";
+        /// <summary>Which log line fixed the video start ("ddagrab", "gdigrab" or "timeout").</summary>
+        public string MarkerKind { get; private set; } = "";
 
         public event Action<CaptureSession> Exited;
         public event Action<CaptureSession> VideoStarted;
@@ -137,6 +139,7 @@ namespace WaveClips.Capture
         {
             if (!double.IsNaN(VideoStart)) return;
             VideoStart = t;
+            MarkerKind = how;
             Log.Info($"Video start marker ({how}) at {t:F3}");
             _audio.SetVideoStart(_pipes, t);
             VideoStarted?.Invoke(this);
