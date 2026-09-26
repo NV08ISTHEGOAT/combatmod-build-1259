@@ -166,7 +166,7 @@ namespace WaveClips.Capture
                 l.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 l.IndexOf("not supported", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 l.IndexOf("unable", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-            var pick = lines.Count > 0 ? lines : tail.Split('\n').Reverse().Take(3).Reverse().ToList();
+            var pick = lines.Count > 0 ? lines : tail.Split('\n').TakeLast(3).ToList();
             var s = string.Join(" · ", pick.Select(l => l.Trim()).Where(l => l.Length > 0).TakeLast(3));
             return s.Length > 400 ? s.Substring(0, 400) + "…" : s;
         }
