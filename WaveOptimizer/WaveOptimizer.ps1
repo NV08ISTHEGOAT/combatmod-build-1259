@@ -6,31 +6,45 @@
     * Every registry value / service it touches is backed up first to
       %ProgramData%\WaveOptimizer\backup.json so "Revert All" restores your original settings.
 
-    Run WaveOptimizer.bat (it elevates to admin for you).
+    Run WaveOptimizer.exe, or WaveOptimizer.bat for the script version (both elevate to admin).
 #>
+
+param(
+    [switch]$SelfTest,   # CI: load the UI, scan hardware, check every tweak (read-only), exit
+    [switch]$RoundTrip   # CI: also apply + revert every non-network tweak (throwaway VMs only!)
+)
 
 #region ---------- bootstrap: STA + admin ----------
 $ErrorActionPreference = 'Stop'
+$script:Version  = '1.1.0'
+$script:Headless = $SelfTest -or $RoundTrip
 
 $isAdmin = (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 $isSta = [Threading.Thread]::CurrentThread.GetApartmentState() -eq 'STA'
 
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
 if (-not $isAdmin -or -not $isSta) {
+    if (-not $PSCommandPath) {
+        # running as the compiled WaveOptimizer.exe (its manifest normally asks for admin itself)
+        [void][Windows.MessageBox]::Show('WaveOptimizer needs administrator rights. Right-click WaveOptimizer.exe and choose "Run as administrator".', 'WaveOptimizer', 'OK', 'Warning')
+        exit 1
+    }
     $verb = if ($isAdmin) { 'Open' } else { 'RunAs' }
     Start-Process -FilePath 'powershell.exe' -Verb $verb `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$PSCommandPath`""
     exit
 }
 
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
-
-# Hide the console window behind the GUI
-Add-Type -Namespace Wave -Name Native -MemberDefinition @'
+if (-not $script:Headless) {
+    # Hide the console window behind the GUI
+    Add-Type -Namespace Wave -Name Native -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
 [DllImport("user32.dll")]   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 '@
-[void][Wave.Native]::ShowWindow([Wave.Native]::GetConsoleWindow(), 0)
+    [void][Wave.Native]::ShowWindow([Wave.Native]::GetConsoleWindow(), 0)
+}
 #endregion
 
 #region ---------- backup store ----------
@@ -803,6 +817,26 @@ $script:Tweaks = @(
       <GradientStop Color="#3D7BFF" Offset="0.5"/>
       <GradientStop Color="#B44DFF" Offset="1"/>
     </LinearGradientBrush>
+    <LinearGradientBrush x:Key="LogoGrad" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#00E5FF" Offset="0"/>
+      <GradientStop Color="#3D7BFF" Offset="0.5"/>
+      <GradientStop Color="#B44DFF" Offset="1"/>
+    </LinearGradientBrush>
+    <DrawingImage x:Key="Logo">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="{StaticResource LogoGrad}">
+            <GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,64,64" RadiusX="15" RadiusY="15"/></GeometryDrawing.Geometry>
+          </GeometryDrawing>
+          <GeometryDrawing Geometry="M10,45 C18,45 20,33 28,33 C36,33 38,45 46,45 C50,45 52,41 54,38">
+            <GeometryDrawing.Pen><Pen Brush="#70FFFFFF" Thickness="4.5" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
+          </GeometryDrawing>
+          <GeometryDrawing Geometry="M10,32 C18,32 20,16 28,16 C36,16 38,32 46,32 C50,32 52,27 54,23">
+            <GeometryDrawing.Pen><Pen Brush="White" Thickness="6" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
+          </GeometryDrawing>
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
     <SolidColorBrush x:Key="Card" Color="#0F1626"/>
     <SolidColorBrush x:Key="CardBorder" Color="#1C2740"/>
     <SolidColorBrush x:Key="Muted" Color="#7F8BA8"/>
@@ -950,14 +984,15 @@ $script:Tweaks = @(
             </Path.Triggers>
           </Path>
         </Canvas>
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="26,18,0,0">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="22,16,0,0">
+          <Image Source="{StaticResource Logo}" Width="42" Height="42" Margin="0,0,12,0" VerticalAlignment="Center"/>
           <TextBlock Text="WAVE" FontSize="34" FontWeight="Black" Foreground="{StaticResource WaveGrad}"/>
           <TextBlock Text="OPTIMIZER" FontSize="34" FontWeight="Light" Margin="8,0,0,0" Foreground="White"/>
           <Border Background="#1A00E5FF" BorderBrush="#5500E5FF" BorderThickness="1" CornerRadius="8" Margin="14,10,0,10" Padding="8,2">
-            <TextBlock Text="v1.0" FontSize="12" Foreground="#00E5FF" VerticalAlignment="Center"/>
+            <TextBlock x:Name="VersionText" Text="v1.1" FontSize="12" Foreground="#00E5FF" VerticalAlignment="Center"/>
           </Border>
         </StackPanel>
-        <TextBlock x:Name="HeaderSub" VerticalAlignment="Top" Margin="28,64,0,0" FontSize="13" Foreground="#9AA6C4" Text="Scanning hardware..."/>
+        <TextBlock x:Name="HeaderSub" VerticalAlignment="Top" Margin="78,64,0,0" FontSize="13" Foreground="#9AA6C4" Text="Scanning hardware..."/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,10,0">
           <Button x:Name="BtnMin" Style="{StaticResource WinBtn}" Content="&#x2014;"/>
           <Button x:Name="BtnMax" Style="{StaticResource WinBtn}" Content="&#x25A2;"/>
@@ -1146,6 +1181,15 @@ function New-WavePath([double]$amp, [double]$period, [int]$width, [int]$height) 
     [void]$sb.Append("L$width,$height Z")
     [Windows.Media.Geometry]::Parse($sb.ToString())
 }
+# Taskbar / Alt-Tab icon rendered from the same vector logo
+try {
+    $dv = New-Object Windows.Media.DrawingVisual; $dc = $dv.RenderOpen()
+    $dc.DrawImage($window.FindResource('Logo'), (New-Object Windows.Rect 0, 0, 64, 64)); $dc.Close()
+    $rtb = New-Object Windows.Media.Imaging.RenderTargetBitmap 64, 64, 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
+    $rtb.Render($dv)
+    $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create($rtb)
+} catch { }
+$ui.VersionText.Text = "v$script:Version"
 $ui.Wave1.Data = New-WavePath 22 400 4400 80
 $ui.Wave2.Data = New-WavePath 16 200 4400 80
 #endregion
@@ -1157,6 +1201,7 @@ function Write-Log([string]$msg) {
     $ui.PageLog.ScrollToEnd()
     $ui.Status.Text = $msg
     Add-Content -Path (Join-Path $script:DataDir 'wave.log') -Value $line -ErrorAction SilentlyContinue
+    if ($script:Headless) { Write-Host "  log: $msg" }
 }
 
 function Update-UI { $window.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) }
@@ -1832,7 +1877,81 @@ $ui.BtnModrinth.Add_Click({ Start-Process 'https://modrinth.com/mod/sodium' })
 $ui.BtnCopyArgs.Add_Click({ [Windows.Clipboard]::SetText($ui.McArgs.Text); Write-Log 'JVM arguments copied to clipboard.' })
 #endregion
 
+#region ---------- self-test (used by the GitHub Actions build) ----------
+function Test-Snapshot($t) {
+    $snap = @{}
+    foreach ($r in @($t.Reg | Where-Object { $_ })) { $snap["$($r.P)|$($r.N)"] = "$(Get-RegValue $r.P $r.N)" }
+    foreach ($svc in @($t.Svc | Where-Object { $_ })) { $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"; $snap["$k|Start"] = "$(Get-RegValue $k 'Start')" }
+    $snap
+}
+
+function Invoke-SelfTest {
+    $script:Failures = 0
+    Write-Host "== WaveOptimizer $script:Version self-test - Windows build $script:Build, PowerShell $($PSVersionTable.PSVersion) =="
+    Write-Host "UI      : XAML loaded, $($ui.Count) named elements"
+    try {
+        $script:Specs = Get-Specs
+        Write-Host ('Specs   : {0} | {1} GB {2} x{3} @ {4} | {5} | GPU: {6}' -f $script:Specs.CPU, $script:Specs.RAMGB, $script:Specs.RAMType,
+            $script:Specs.RAMSticks, $script:Specs.RAMSpeed, $script:Specs.DiskKind, (($script:Specs.GPUs | ForEach-Object { $_.Name }) -join ', '))
+        Show-Dashboard
+        Write-Host "Dash    : $($ui.SpecGrid.Children.Count) spec cards, $($ui.RecList.Children.Count) recommendations"
+    } catch { Write-Host "FAIL dashboard: $($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))"; $script:Failures++ }
+
+    try {
+        Build-TweakList
+        $active = @($script:Visible | Where-Object { $script:State[$_.Id] }).Count
+        Write-Host "Tweaks  : $($script:Tweaks.Count) defined, $($script:Visible.Count) apply on this PC, $active already active"
+        Write-Host ('Hidden  : ' + ((@($script:Tweaks | Where-Object { $script:Visible -notcontains $_ }) | ForEach-Object { $_.Id }) -join ', '))
+        foreach ($l in 'S', 'G', 'X') {
+            Set-Preset $l
+            $n = @($script:Visible | Where-Object { [bool]$script:Toggles[$_.Id].IsChecked -ne [bool]$script:State[$_.Id] }).Count
+            Write-Host "Preset $l would change $n switch(es)  [button: $($ui.BtnApply.Content)]"
+        }
+        Sync-Toggles
+        $ui.TweakSearch.Text = 'mouse'
+        Write-Host "Search  : 'mouse' -> $(@($script:CardById.Values | Where-Object { $_.Visibility -eq 'Visible' }).Count) card(s)"
+        $ui.TweakSearch.Text = ''
+        $script:CatFilter = 'Services'; Update-TweakFilter
+        Write-Host "Filter  : Services -> $(@($script:CardById.Values | Where-Object { $_.Visibility -eq 'Visible' }).Count) card(s)"
+        $script:CatFilter = 'All'; Update-TweakFilter
+    } catch { Write-Host "FAIL tweak list: $($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))"; $script:Failures++ }
+
+    try { Show-McArgs; Show-GpuPrefs; Write-Host "MC      : $($ui.McRamInfo.Text)" }
+    catch { Write-Host "FAIL minecraft page: $($_.Exception.Message)"; $script:Failures++ }
+
+    if ($RoundTrip) {
+        $cands = @($script:Visible | Where-Object { $_.Cat -ne 'Network' -and $_.Id -ne 's_hyperv' -and -not $script:State[$_.Id] })
+        Write-Host ''
+        Write-Host "== Round-trip: apply + revert $($cands.Count) tweaks that are currently OFF =="
+        $pass = 0; $warn = 0
+        foreach ($t in $cands) {
+            $before = Test-Snapshot $t
+            try { Invoke-TweakApply $t } catch { Write-Host "WARN $($t.Id): apply threw: $($_.Exception.Message)"; $warn++ }
+            if ($t.Tasks) { $script:AllTasks = @(Get-ScheduledTask) }
+            $on = Test-Tweak $t
+            try { Invoke-TweakRevert $t } catch { Write-Host "FAIL $($t.Id): revert threw: $($_.Exception.Message)"; $script:Failures++; continue }
+            if ($t.Tasks) { $script:AllTasks = @(Get-ScheduledTask) }
+            $off = -not (Test-Tweak $t)
+            $after = Test-Snapshot $t
+            $diff = @($before.Keys | Where-Object { $before[$_] -ne $after[$_] })
+            if (-not $off -or $diff.Count) { Write-Host "FAIL $($t.Id): not restored (off=$off, changed: $($diff -join '; '))"; $script:Failures++ }
+            elseif (-not $on) { Write-Host "WARN $($t.Id): did not turn on here (edition/hardware)"; $warn++ }
+            else { Write-Host "PASS $($t.Id)"; $pass++ }
+        }
+        $left = @($script:Backup.Keys | Where-Object { $_ -ne 'ultimate' })
+        Write-Host "Round-trip: $pass passed, $warn warnings. Backup entries left: $($left.Count) $($left -join ', ')"
+        if ($left.Count) { $script:Failures++ }
+    }
+    Write-Host "== Self-test finished: $script:Failures failure(s) =="
+}
+#endregion
+
 #region ---------- start ----------
+if ($script:Headless) {
+    Invoke-SelfTest
+    exit ([int]($script:Failures -gt 0))
+}
+
 $window.Add_ContentRendered({
     Write-Log 'WaveOptimizer started. Scanning hardware...'; Update-UI
     try { $script:Specs = Get-Specs } catch { Write-Log "Hardware scan error: $($_.Exception.Message)"; $script:Specs = @{ RAMGB = 8; GPUs = @() } }

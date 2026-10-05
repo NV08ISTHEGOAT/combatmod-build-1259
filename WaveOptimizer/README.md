@@ -3,10 +3,22 @@
 A Windows 10/11 gaming optimizer with a dark, animated UI. It reads your hardware, tells you what's actually limiting your FPS, and applies tweaks you can undo.
 
 ## Run it
-1. Download the `WaveOptimizer` folder.
-2. Double-click **`WaveOptimizer.bat`** and accept the admin prompt.
+**The app:** go to this repo's **Releases**, open **WaveOptimizer (latest build)**, and download **`WaveOptimizer.exe`**. Double-click it and accept the admin prompt. You don't need to install anything.
 
-You don't need to install anything. It uses the PowerShell 5.1 and WPF that come with Windows.
+- Windows SmartScreen may say *"Windows protected your PC"* because the exe isn't code-signed. Click **More info → Run anyway**.
+- Some antivirus programs flag *any* PowerShell-compiled exe. If yours does, use the script version below, which is the same code in a plain-text file you can read.
+
+**Script version:** download the `WaveOptimizer` folder and double-click **`WaveOptimizer.bat`**.
+
+## How the exe is built
+Every push that changes `WaveOptimizer/` runs the **Build WaveOptimizer** GitHub Action on a Windows VM:
+1. **Self-test:** loads the real UI, scans the hardware and checks every tweak's status (read-only).
+2. **Round-trip test:** applies and then reverts every non-network tweak on the throwaway VM, and fails the build if anything isn't restored exactly.
+3. **Build:** `build.ps1` renders the logo into `WaveOptimizer.ico` and compiles the script with [ps2exe](https://github.com/MScholtes/PS2EXE).
+4. **Exe test:** runs the self-test again inside the compiled exe.
+5. **Publish:** uploads the exe to the `waveoptimizer-latest` release with its SHA-256.
+
+To build it yourself on Windows, run `powershell -ExecutionPolicy Bypass -File build.ps1`. The exe ends up in `dist\`.
 
 ## Tabs
 | Tab | What it does |

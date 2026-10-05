@@ -1,0 +1,60 @@
+name: Build WaveOptimizer
+
+on:
+  push:
+    paths:
+      - "WaveOptimizer/**"
+      - ".github/workflows/waveoptimizer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test on real Windows (UI, hardware scan, every tweak's status)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -STA -File WaveOptimizer\WaveOptimizer.ps1 -SelfTest
+
+      - name: Apply + revert every non-network tweak on this throwaway VM
+        run: powershell -NoProfile -ExecutionPolicy Bypass -STA -File WaveOptimizer\WaveOptimizer.ps1 -RoundTrip
+
+      - name: Build WaveOptimizer.exe
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File WaveOptimizer\build.ps1
+
+      - name: Self-test the compiled exe
+        run: |
+          $p = Start-Process -FilePath WaveOptimizer\dist\WaveOptimizer.exe -ArgumentList '-SelfTest' -NoNewWindow -Wait -PassThru
+          exit $p.ExitCode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WaveOptimizer
+          path: |
+            WaveOptimizer/dist/WaveOptimizer.exe
+            WaveOptimizer/dist/WaveOptimizer.exe.sha256
+            WaveOptimizer/README.md
+          if-no-files-found: error
+
+      - name: Publish "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: waveoptimizer-latest
+          target_commitish: ${{ github.sha }}
+          name: WaveOptimizer (latest build)
+          prerelease: true
+          files: |
+            WaveOptimizer/dist/WaveOptimizer.exe
+            WaveOptimizer/dist/WaveOptimizer.exe.sha256
+          body: |
+            Download **WaveOptimizer.exe** below and double-click it (it asks for admin rights).
+
+            Built automatically from commit ${{ github.sha }} after passing the self-test on Windows.
+            Windows SmartScreen may warn because the exe is not code-signed: click "More info" -> "Run anyway".
