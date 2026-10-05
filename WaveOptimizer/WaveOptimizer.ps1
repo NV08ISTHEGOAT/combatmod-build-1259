@@ -71,23 +71,34 @@ function Get-RegValue($Path, $Name) {
 }
 
 # Write a registry value, remembering the ORIGINAL value the first time we touch it.
-function Set-Reg($Path, $Name, $Value, $Type = 'DWord') {
+# Remember the ORIGINAL value the first time we touch it. Returns $true if a new backup entry was made.
+function Save-RegOriginal($Path, $Name) {
     $key = "$Path|$Name"
-    if (-not $script:Backup.ContainsKey($key)) {
-        $entry = @{ Existed = $false; Value = $null; Type = $null }
-        if (Test-Path $Path) {
-            $item = Get-Item -Path $Path
-            if ($item.GetValueNames() -contains $Name) {
-                $entry.Existed = $true
-                $entry.Value   = $item.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
-                $entry.Type    = $item.GetValueKind($Name).ToString()
-            }
+    if ($script:Backup.ContainsKey($key)) { return $false }
+    $entry = @{ Existed = $false; Value = $null; Type = $null }
+    if (Test-Path $Path) {
+        $item = Get-Item -Path $Path
+        if ($item.GetValueNames() -contains $Name) {
+            $entry.Existed = $true
+            $entry.Value   = $item.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
+            $entry.Type    = $item.GetValueKind($Name).ToString()
         }
-        $script:Backup[$key] = $entry
-        Save-Backup
     }
-    if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
-    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+    $script:Backup[$key] = $entry
+    Save-Backup
+    return $true
+}
+
+# Write a registry value (backing up the original first).
+function Set-Reg($Path, $Name, $Value, $Type = 'DWord') {
+    $fresh = Save-RegOriginal $Path $Name
+    try {
+        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+        New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+    } catch {
+        if ($fresh) { $script:Backup.Remove("$Path|$Name"); Save-Backup }
+        throw
+    }
 }
 
 # Put a registry value back to exactly what it was before WaveOptimizer touched it.
@@ -148,16 +159,39 @@ function Get-NetInterfaceKeys {
 
 function Test-ServiceExists($Name) { Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$Name" }
 
+# Some service keys are protected by Windows even from admins; the Service Control Manager can still change them.
+function Set-ServiceStartScm($Name, [int]$StartValue) {
+    $mode = switch ($StartValue) { 2 { 'auto' } 3 { 'demand' } 4 { 'disabled' } default { throw "Unsupported start type $StartValue" } }
+    $out = sc.exe config $Name start= $mode
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe could not change $Name ($("$out".Trim()))" }
+}
+
 function Set-ServiceStart($Name, $StartValue) {
     $path = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
     if (-not (Test-Path $path)) { return }
-    Set-Reg $path 'Start' $StartValue
+    $fresh = Save-RegOriginal $path 'Start'
+    try {
+        New-ItemProperty -Path $path -Name 'Start' -Value $StartValue -PropertyType DWord -Force | Out-Null
+    } catch {
+        try { Set-ServiceStartScm $Name $StartValue }
+        catch {
+            if ($fresh) { $script:Backup.Remove("$path|Start"); Save-Backup }
+            throw "Windows protects the $Name service on this PC - it cannot be changed."
+        }
+    }
     if ($StartValue -eq 4) { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
 }
 
 function Restore-ServiceStart($Name) {
     $path = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
-    Restore-Reg $path 'Start'
+    $key = "$path|Start"
+    if (-not $script:Backup.ContainsKey($key)) { return }
+    $orig = $script:Backup[$key]
+    try { Restore-Reg $path 'Start' }
+    catch {
+        if ($orig.Existed) { Set-ServiceStartScm $Name ([int]$orig.Value) }
+        $script:Backup.Remove($key); Save-Backup
+    }
     if ((Get-RegValue $path 'Start') -eq 2) { Start-Service -Name $Name -ErrorAction SilentlyContinue }
 }
 
@@ -360,6 +394,7 @@ $script:Tweaks = @(
        Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0)) },
     @{ Id='hibernate'; Cat='Power & CPU'; Name='Disable hibernation'; Risk='Moderate'; Presets='X'
        Desc='Deletes hiberfil.sys (frees disk space equal to ~40-100% of your RAM). You lose the Hibernate option.'
+       Applies={ (Test-Path "$env:SystemDrive\hiberfil.sys") -or (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled') -eq 0 }
        Apply={ Backup-Special 'hibernate' ((Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled') -ne 0); powercfg /hibernate off | Out-Null }
        Revert={ $b = Pop-Special 'hibernate'; if ($b -and $b.Value) { powercfg /hibernate on | Out-Null } }
        Check={ (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled') -eq 0 } },
@@ -1321,7 +1356,8 @@ function Show-Dashboard {
     Add-SpecCard 'PROCESSOR' $s.CPU $s.CPUInfo
     if ($mainGpu) { Add-SpecCard 'GRAPHICS' $mainGpu.Name ('{0} GB VRAM  -  driver {1}' -f $mainGpu.VRAMGB, $mainGpu.Driver) }
     else          { Add-SpecCard 'GRAPHICS' 'Not detected' '' }
-    Add-SpecCard 'MEMORY' ('{0} GB {1}' -f $s.RAMGB, $s.RAMType) ('{0} stick(s) @ {1} MT/s  -  {2} GB free' -f $s.RAMSticks, $s.RAMSpeed, $s.FreeRAMGB)
+    $speed = if ($s.RAMSpeed) { "$($s.RAMSpeed) MT/s" } else { 'speed unknown' }
+    Add-SpecCard 'MEMORY' ('{0} GB {1}' -f $s.RAMGB, $s.RAMType) ('{0} stick(s) @ {1}  -  {2} GB free' -f $s.RAMSticks, $speed, $s.FreeRAMGB)
     Add-SpecCard 'SYSTEM DRIVE' $s.DiskKind ('{0} GB free of {1} GB' -f $s.DiskFreeGB, $s.DiskSizeGB)
     if ($mainGpu -and $mainGpu.ResX) { Add-SpecCard 'DISPLAY' ('{0}x{1} @ {2} Hz' -f $mainGpu.ResX, $mainGpu.ResY, $mainGpu.Hz) ("Power plan: $($s.PowerPlan)") }
     Add-SpecCard 'WINDOWS' $s.OS ("Build $($s.Build)  -  $($s.Board)")
@@ -1929,13 +1965,17 @@ function Invoke-SelfTest {
             try { Invoke-TweakApply $t } catch { Write-Host "WARN $($t.Id): apply threw: $($_.Exception.Message)"; $warn++ }
             if ($t.Tasks) { $script:AllTasks = @(Get-ScheduledTask) }
             $on = Test-Tweak $t
+            $applied = Test-Snapshot $t
             try { Invoke-TweakRevert $t } catch { Write-Host "FAIL $($t.Id): revert threw: $($_.Exception.Message)"; $script:Failures++; continue }
             if ($t.Tasks) { $script:AllTasks = @(Get-ScheduledTask) }
             $off = -not (Test-Tweak $t)
             $after = Test-Snapshot $t
             $diff = @($before.Keys | Where-Object { $before[$_] -ne $after[$_] })
             if (-not $off -or $diff.Count) { Write-Host "FAIL $($t.Id): not restored (off=$off, changed: $($diff -join '; '))"; $script:Failures++ }
-            elseif (-not $on) { Write-Host "WARN $($t.Id): did not turn on here (edition/hardware)"; $warn++ }
+            elseif (-not $on) {
+                $why = @(foreach ($r in @($t.Reg | Where-Object { $_ })) { "$($r.N): wanted '$($r.V)' got '$($applied["$($r.P)|$($r.N)"])'" }) -join '; '
+                Write-Host "WARN $($t.Id): did not turn on here (edition/hardware) $why"; $warn++
+            }
             else { Write-Host "PASS $($t.Id)"; $pass++ }
         }
         $left = @($script:Backup.Keys | Where-Object { $_ -ne 'ultimate' })
