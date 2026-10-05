@@ -96,9 +96,31 @@ function Restore-Reg($Path, $Name) {
 #endregion
 
 #region ---------- helpers for non-registry tweaks ----------
+$script:Build = [int](Get-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'CurrentBuild')
+$script:IsWin11 = $script:Build -ge 22000
+$script:RamKB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1KB)
+$script:AllTasks = @()
+$script:NetAdapters = @()
+
 function Get-ActiveSchemeGuid {
     $out = powercfg /getactivescheme
     if ("$out" -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') { $Matches[1] }
+}
+
+function Test-PerfPlan {
+    $g = Get-ActiveSchemeGuid
+    if ($g -in @('8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c', 'e9a42b02-d5df-448d-aa00-03f14749eb61')) { return $true }
+    if ($script:Backup.ContainsKey('ultimate') -and $script:Backup['ultimate'].Value -eq $g) { return $true }
+    "$(powercfg /getactivescheme)" -match 'Ultimate|High performance|Ultieme|Hoge prestaties|Hohe Leistung|Performances|Alto rendimiento'
+}
+
+# Language-independent read of a power setting: the last two hex values printed are AC then DC.
+function Get-PwrAc($Sub, $Set) {
+    $out = powercfg /query SCHEME_CURRENT $Sub $Set
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $hex = @([regex]::Matches(($out -join "`n"), ':\s*0x([0-9a-fA-F]+)') | ForEach-Object { $_.Groups[1].Value })
+    if ($hex.Count -lt 2) { return $null }
+    [Convert]::ToInt64($hex[$hex.Count - 2], 16)
 }
 
 function Get-NetInterfaceKeys {
@@ -110,6 +132,8 @@ function Get-NetInterfaceKeys {
         ForEach-Object { 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + $_.PSChildName }
 }
 
+function Test-ServiceExists($Name) { Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$Name" }
+
 function Set-ServiceStart($Name, $StartValue) {
     $path = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
     if (-not (Test-Path $path)) { return }
@@ -120,176 +144,649 @@ function Set-ServiceStart($Name, $StartValue) {
 function Restore-ServiceStart($Name) {
     $path = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
     Restore-Reg $path 'Start'
-    $start = Get-RegValue $path 'Start'
-    if ($start -eq 2) { Start-Service -Name $Name -ErrorAction SilentlyContinue }
+    if ((Get-RegValue $path 'Start') -eq 2) { Start-Service -Name $Name -ErrorAction SilentlyContinue }
 }
 
-function Get-ProcessorSettingAc($Alias) {
-    $out = powercfg /query SCHEME_CURRENT SUB_PROCESSOR $Alias
-    $line = $out | Where-Object { $_ -match 'Current AC Power Setting Index' } | Select-Object -First 1
-    if ($line -and $line -match '0x([0-9a-fA-F]+)') { [Convert]::ToInt32($Matches[1], 16) }
+function Get-TaskMatches($Specs) {
+    foreach ($spec in $Specs) { $script:AllTasks | Where-Object { ($_.TaskPath + $_.TaskName) -like $spec } }
+}
+
+function Get-NicProps($Keyword) {
+    foreach ($a in $script:NetAdapters) {
+        $p = Get-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword $Keyword -ErrorAction SilentlyContinue
+        if ($p) { [pscustomobject]@{ Adapter = $a; Prop = $p; Keyword = $Keyword } }
+    }
+}
+
+function Backup-Special($Key, $Value) {
+    if (-not $script:Backup.ContainsKey($Key)) { $script:Backup[$Key] = @{ Existed = $true; Value = $Value; Type = 'Special' }; Save-Backup }
+}
+
+function Pop-Special($Key) {
+    if (-not $script:Backup.ContainsKey($Key)) { return $null }
+    $v = $script:Backup[$Key]; $script:Backup.Remove($Key); Save-Backup
+    $v
+}
+
+function RegV($P, $N, $V, $T = 'DWord') { @{ P = $P; N = $N; V = $V; T = $T } }
+
+function SvcT($Id, $Name, $Risk, $Presets, $Svc, $Desc, $Start = 4) {
+    @{ Id = $Id; Cat = 'Services'; Name = $Name; Risk = $Risk; Presets = $Presets; Svc = $Svc; SvcStart = $Start; Desc = $Desc }
+}
+
+function TaskT($Id, $Name, $Risk, $Presets, $Tasks, $Desc) {
+    @{ Id = $Id; Cat = 'Scheduled Tasks'; Name = $Name; Risk = $Risk; Presets = $Presets; Tasks = $Tasks; Desc = $Desc }
 }
 #endregion
 
 #region ---------- TWEAK CATALOGUE ----------
-# Reg   = declarative registry changes (applied/reverted/checked automatically)
-# Apply / Revert / Check = custom script blocks for things that are not plain registry writes
-# Presets: S = Safe, G = Gaming, X = Extreme
+# Each tweak can combine any of these parts; WaveOptimizer applies, backs up, reverts and checks them generically:
+#   Reg   = registry values            Svc   = services to set to SvcStart (default 4 = Disabled)
+#   Tasks = scheduled task wildcards   Pwr   = powercfg settings (AC / plugged in)
+#   Nic   = network adapter keywords   MMA   = Memory Manager agent feature to disable
+#   Apply / Revert / Check             = custom script blocks     Applies = when to show it
+# Presets: S = Safe, G = Gaming, X = Extreme. Risk: Safe / Moderate / Advanced.
+$ADV  = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+$CDM  = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+$PW   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows'
+$MM   = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+$GC   = 'HKCU:\System\GameConfigStore'
+$GB   = 'HKCU:\Software\Microsoft\GameBar'
+$EDGE = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+$MEMK = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+$FSK  = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+$CS   = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+$GFX  = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
+$DESK = 'HKCU:\Control Panel\Desktop'
+$USB  = '2a737441-1930-4402-8d77-b2bebba308a3'
+$DXK  = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+
 $script:Tweaks = @(
-    # ---------------- GAMING ----------------
+    # ============================== GAMING ==============================
     @{ Id='gamemode'; Cat='Gaming'; Name='Windows Game Mode'; Risk='Safe'; Presets='SGX'
        Desc='Tells Windows to prioritise the game you are playing and pause Windows Update installs while you play.'
-       Reg=@( @{P='HKCU:\Software\Microsoft\GameBar'; N='AllowAutoGameMode'; V=1},
-              @{P='HKCU:\Software\Microsoft\GameBar'; N='AutoGameModeEnabled'; V=1} ) },
-
+       Reg=@((RegV $GB 'AllowAutoGameMode' 1), (RegV $GB 'AutoGameModeEnabled' 1)) },
     @{ Id='gamedvr'; Cat='Gaming'; Name='Disable Xbox Game DVR background recording'; Risk='Safe'; Presets='SGX'
        Desc='Stops Windows silently recording gameplay in the background. Frees GPU encoder time and a bit of FPS.'
-       Reg=@( @{P='HKCU:\System\GameConfigStore'; N='GameDVR_Enabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR'; N='AppCaptureEnabled'; V=0},
-              @{P='HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR'; N='AllowGameDVR'; V=0} ) },
-
-    @{ Id='hags'; Cat='Gaming'; Name='Hardware-accelerated GPU scheduling'; Risk='Safe'; Presets='GX'; Reboot=$true
-       Desc='Lets the GPU manage its own memory queue. Lower latency on GTX 10-series / RX 5000 and newer. Needs a reboot.'
-       Reg=@( @{P='HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'; N='HwSchMode'; V=2} ) },
-
+       Reg=@((RegV $GC 'GameDVR_Enabled' 0), (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' 'AppCaptureEnabled' 0),
+             (RegV "$PW\GameDVR" 'AllowGameDVR' 0)) },
+    @{ Id='dvrcapture'; Cat='Gaming'; Name='Disable instant-replay buffer + audio capture'; Risk='Safe'; Presets='SGX'
+       Desc='Turns off the "record what happened" buffer and background audio capture used by Game Bar.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' 'HistoricalCaptureEnabled' 0),
+             (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR' 'AudioCaptureEnabled' 0)) },
+    @{ Id='gamebarbtn'; Cat='Gaming'; Name='Xbox controller button does not open Game Bar'; Risk='Safe'; Presets='GX'
+       Desc='Stops the Game Bar overlay popping up over your game when you press the Xbox/guide button.'
+       Reg=@((RegV $GB 'UseNexusForGameBarEnabled' 0)) },
+    @{ Id='gamebartips'; Cat='Gaming'; Name='Hide Game Bar startup tips'; Risk='Safe'; Presets='SGX'
+       Desc='No more "Press Win+G to open Game Bar" popup when a game starts.'
+       Reg=@((RegV $GB 'ShowStartupPanel' 0)) },
     @{ Id='gamesprio'; Cat='Gaming'; Name='Boost game CPU/GPU scheduling priority'; Risk='Safe'; Presets='GX'
        Desc='Raises the Multimedia Class Scheduler "Games" profile: higher GPU priority, high scheduling category.'
-       Reg=@( @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; N='GPU Priority'; V=8},
-              @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; N='Priority'; V=6},
-              @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; N='Scheduling Category'; V='High'; T='String'},
-              @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; N='SFIO Priority'; V='High'; T='String'},
-              @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; N='SystemResponsiveness'; V=10} ) },
-
+       Reg=@((RegV "$MM\Tasks\Games" 'GPU Priority' 8), (RegV "$MM\Tasks\Games" 'Priority' 6),
+             (RegV "$MM\Tasks\Games" 'Scheduling Category' 'High' 'String'), (RegV "$MM\Tasks\Games" 'SFIO Priority' 'High' 'String'),
+             (RegV $MM 'SystemResponsiveness' 10)) },
     @{ Id='foreground'; Cat='Gaming'; Name='Favor foreground app (short CPU quantum)'; Risk='Safe'; Presets='GX'
        Desc='Win32PrioritySeparation = 0x26: the window you are focused on gets longer, more frequent CPU slices.'
-       Reg=@( @{P='HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl'; N='Win32PrioritySeparation'; V=38} ) },
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' 'Win32PrioritySeparation' 38)) },
+    @{ Id='windowedopt'; Cat='Gaming'; Name='Optimizations for windowed games + VRR'; Risk='Safe'; Presets='GX'; Applies={ $script:IsWin11 }
+       Desc='Upgrades DX10/11 borderless-window games to the low-latency flip model and enables VRR (G-Sync/FreeSync) in windowed mode.'
+       Apply={
+           $cur = "$(Get-RegValue $DXK 'DirectXUserGlobalSettings')"
+           $map = [ordered]@{}
+           foreach ($pair in ($cur -split ';')) { if ($pair -match '^(.+?)=(.*)$') { $map[$Matches[1]] = $Matches[2] } }
+           $map['SwapEffectUpgradeEnable'] = '1'; $map['VRROptimizeEnable'] = '1'
+           Set-Reg $DXK 'DirectXUserGlobalSettings' ((($map.Keys | ForEach-Object { "$_=$($map[$_])" }) -join ';') + ';') 'String'
+       }
+       Revert={ Restore-Reg $DXK 'DirectXUserGlobalSettings' }
+       Check={ $v = "$(Get-RegValue $DXK 'DirectXUserGlobalSettings')"; $v -match 'SwapEffectUpgradeEnable=1' -and $v -match 'VRROptimizeEnable=1' } },
+    @{ Id='fso'; Cat='Gaming'; Name='Disable fullscreen optimizations (global)'; Risk='Advanced'; Presets=''
+       Desc='Forces true exclusive fullscreen in older DX9-11 games. Can cut input lag in some titles, but breaks fast Alt-Tab/overlays in others. Test, revert if worse.'
+       Reg=@((RegV $GC 'GameDVR_FSEBehaviorMode' 2), (RegV $GC 'GameDVR_HonorUserFSEBehaviorMode' 1),
+             (RegV $GC 'GameDVR_FSEBehavior' 2), (RegV $GC 'GameDVR_DXGIHonorFSEWindowsCompatible' 1)) },
+    @{ Id='timerres'; Cat='Gaming'; Name='Allow global timer resolution requests'; Risk='Advanced'; Presets='X'; Reboot=$true; Applies={ $script:IsWin11 }
+       Desc='Windows 11 ignores high-precision timer requests from games that are minimized/covered. This restores the old behaviour for steadier frame pacing; slightly higher idle power.'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalTimerResolutionRequests' 1)) },
 
-    @{ Id='mouseaccel'; Cat='Gaming'; Name='Disable mouse acceleration'; Risk='Safe'; Presets='GX'
+    # ============================== INPUT ==============================
+    @{ Id='mouseaccel'; Cat='Mouse & Keyboard'; Name='Disable mouse acceleration'; Risk='Safe'; Presets='GX'
        Desc='Turns off "Enhance pointer precision" so aim is 1:1 with your hand movement.'
-       Reg=@( @{P='HKCU:\Control Panel\Mouse'; N='MouseSpeed'; V='0'; T='String'},
-              @{P='HKCU:\Control Panel\Mouse'; N='MouseThreshold1'; V='0'; T='String'},
-              @{P='HKCU:\Control Panel\Mouse'; N='MouseThreshold2'; V='0'; T='String'} ) },
+       Reg=@((RegV 'HKCU:\Control Panel\Mouse' 'MouseSpeed' '0' 'String'), (RegV 'HKCU:\Control Panel\Mouse' 'MouseThreshold1' '0' 'String'),
+             (RegV 'HKCU:\Control Panel\Mouse' 'MouseThreshold2' '0' 'String')) },
+    @{ Id='stickykeys'; Cat='Mouse & Keyboard'; Name='Disable Sticky Keys shortcut (Shift x5)'; Risk='Safe'; Presets='SGX'
+       Desc='No more Sticky Keys popup tabbing you out of a game when you spam Shift.'
+       Reg=@((RegV 'HKCU:\Control Panel\Accessibility\StickyKeys' 'Flags' '506' 'String')) },
+    @{ Id='filterkeys'; Cat='Mouse & Keyboard'; Name='Disable Filter Keys shortcut (hold Right Shift)'; Risk='Safe'; Presets='SGX'
+       Desc='Stops the Filter Keys popup when you hold Right Shift for 8 seconds.'
+       Reg=@((RegV 'HKCU:\Control Panel\Accessibility\Keyboard Response' 'Flags' '122' 'String')) },
+    @{ Id='togglekeys'; Cat='Mouse & Keyboard'; Name='Disable Toggle Keys shortcut (hold Num Lock)'; Risk='Safe'; Presets='SGX'
+       Desc='Stops the Toggle Keys popup when you hold Num Lock for 5 seconds.'
+       Reg=@((RegV 'HKCU:\Control Panel\Accessibility\ToggleKeys' 'Flags' '58' 'String')) },
+    @{ Id='langhotkey'; Cat='Mouse & Keyboard'; Name='Disable Alt+Shift keyboard-layout switching'; Risk='Safe'; Presets='GX'
+       Desc='Stops Alt+Shift / Ctrl+Shift silently switching your keyboard layout mid-game (WASD suddenly becomes ZQSD).'
+       Reg=@((RegV 'HKCU:\Keyboard Layout\Toggle' 'Hotkey' '3' 'String'), (RegV 'HKCU:\Keyboard Layout\Toggle' 'Language Hotkey' '3' 'String'),
+             (RegV 'HKCU:\Keyboard Layout\Toggle' 'Layout Hotkey' '3' 'String')) },
+    @{ Id='keyrepeat'; Cat='Mouse & Keyboard'; Name='Fastest keyboard repeat rate'; Risk='Safe'; Presets='GX'
+       Desc='Shortest repeat delay and fastest repeat speed. Takes effect after sign-out.'
+       Reg=@((RegV 'HKCU:\Control Panel\Keyboard' 'KeyboardDelay' '0' 'String'), (RegV 'HKCU:\Control Panel\Keyboard' 'KeyboardSpeed' '31' 'String')) },
+    @{ Id='hovertime'; Cat='Mouse & Keyboard'; Name='Faster mouse-hover response'; Risk='Safe'; Presets='GX'
+       Desc='Tooltips and hover previews appear after 10 ms instead of 400 ms.'
+       Reg=@((RegV 'HKCU:\Control Panel\Mouse' 'MouseHoverTime' '10' 'String')) },
+    @{ Id='inkworkspace'; Cat='Mouse & Keyboard'; Name='Disable Windows Ink Workspace'; Risk='Safe'; Presets='GX'
+       Desc='Stops pen/tablet buttons popping up the Ink Workspace (osu! and drawing-tablet players).'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace' 'AllowWindowsInkWorkspace' 0)) },
 
-    # ---------------- POWER ----------------
+    # ============================== GPU & DISPLAY ==============================
+    @{ Id='hags'; Cat='GPU & Display'; Name='Hardware-accelerated GPU scheduling'; Risk='Safe'; Presets='GX'; Reboot=$true
+       Desc='Lets the GPU manage its own memory queue. Lower latency on GTX 10-series / RX 5000 and newer. Needs a reboot.'
+       Reg=@((RegV $GFX 'HwSchMode' 2)) },
+    @{ Id='mpo'; Cat='GPU & Display'; Name='Disable Multi-Plane Overlay (MPO)'; Risk='Advanced'; Presets=''; Reboot=$true
+       Desc='NVIDIA-documented fix for flicker, black screens and stutter with multiple monitors or video playing on a second screen. Only use if you have those problems.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' 'OverlayTestMode' 5)) },
+    @{ Id='tdr'; Cat='GPU & Display'; Name='Longer GPU timeout before driver reset (TDR)'; Risk='Moderate'; Presets='X'; Reboot=$true
+       Desc='Gives the GPU 10 s instead of 2 s before Windows resets the driver. Fixes "display driver stopped responding" crashes during shader compilation.'
+       Reg=@((RegV $GFX 'TdrDelay' 10)) },
+    @{ Id='adaptbright'; Cat='GPU & Display'; Name='Disable adaptive brightness (plugged in)'; Risk='Safe'; Presets='GX'
+       Desc='Stops the screen dimming/brightening based on content or light sensor while gaming.'
+       Pwr=@(@{ Sub='SUB_VIDEO'; Set='ADAPTBRIGHT'; V=0 }) },
+    @{ Id='nvtelemetry'; Cat='GPU & Display'; Name='Disable NVIDIA telemetry service'; Risk='Safe'; Presets='GX'
+       Desc='Turns off NvTelemetryContainer (older NVIDIA drivers). Does not affect the driver or control panel.'
+       Svc=@('NvTelemetryContainer') },
+
+    # ============================== POWER & CPU ==============================
     @{ Id='powerplan'; Cat='Power & CPU'; Name='Ultimate Performance power plan'; Risk='Safe'; Presets='GX'
        Desc='Unlocks and activates the hidden Ultimate Performance plan (falls back to High Performance). CPU stops downclocking between frames.'
        Apply={
-           $before = Get-ActiveSchemeGuid
-           if (-not $script:Backup.ContainsKey('powerplan')) { $script:Backup['powerplan'] = @{ Existed=$true; Value=$before; Type='Scheme' }; Save-Backup }
-           $existing = powercfg /list | Where-Object { $_ -match 'Ultimate Performance' } | Select-Object -First 1
-           $guid = $null
-           if ($existing -and "$existing" -match '([0-9a-fA-F-]{36})') { $guid = $Matches[1] }
+           Backup-Special 'powerplan' (Get-ActiveSchemeGuid)
+           $list = "$(powercfg /list)"; $guid = $null
+           if ($script:Backup.ContainsKey('ultimate') -and $list -match $script:Backup['ultimate'].Value) { $guid = $script:Backup['ultimate'].Value }
            if (-not $guid) {
                $dup = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
-               if ("$dup" -match '([0-9a-fA-F-]{36})') { $guid = $Matches[1] }
+               if ("$dup" -match '([0-9a-fA-F-]{36})') { $guid = $Matches[1]; $script:Backup['ultimate'] = @{ Existed=$true; Value=$guid; Type='Special' }; Save-Backup }
            }
            if (-not $guid) { $guid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'; Write-Log 'Ultimate plan not available on this PC - using High Performance.' }
            powercfg /setactive $guid | Out-Null
        }
-       Revert={
-           if ($script:Backup.ContainsKey('powerplan')) {
-               powercfg /setactive $script:Backup['powerplan'].Value | Out-Null
-               $script:Backup.Remove('powerplan'); Save-Backup
-           } else { powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e | Out-Null }
-       }
-       Check={ $n = "$(powercfg /getactivescheme)"; $n -match 'Ultimate|High performance|Hohe Leistung|Hoge prestaties' } },
-
+       Revert={ $b = Pop-Special 'powerplan'; if ($b) { powercfg /setactive $b.Value | Out-Null } }
+       Check={ Test-PerfPlan } },
     @{ Id='powerthrottle'; Cat='Power & CPU'; Name='Disable power throttling'; Risk='Moderate'; Presets='GX'
-       Desc='Stops Windows parking background/game threads on slow efficiency states. Uses more battery on laptops.'
-       Reg=@( @{P='HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling'; N='PowerThrottlingOff'; V=1} ) },
-
-    @{ Id='coreparking'; Cat='Power & CPU'; Name='Disable CPU core parking (current plan)'; Risk='Moderate'; Presets='X'
-       Desc='Keeps 100% of cores unparked on AC power. Can smooth out stutter on older Intel/AMD CPUs.'
-       Apply={
-           if (-not $script:Backup.ContainsKey('cpmincores')) {
-               $cur = Get-ProcessorSettingAc 'CPMINCORES'; if ($null -eq $cur) { $cur = 5 }
-               $script:Backup['cpmincores'] = @{ Existed=$true; Value=$cur; Type='Power' }; Save-Backup
-           }
-           powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES 100 | Out-Null
-           powercfg /setactive SCHEME_CURRENT | Out-Null
-       }
-       Revert={
-           $v = 5; if ($script:Backup.ContainsKey('cpmincores')) { $v = [int]$script:Backup['cpmincores'].Value; $script:Backup.Remove('cpmincores'); Save-Backup }
-           powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES $v | Out-Null
-           powercfg /setactive SCHEME_CURRENT | Out-Null
-       }
-       Check={ (Get-ProcessorSettingAc 'CPMINCORES') -eq 100 } },
-
+       Desc='Stops Windows pushing background/game threads onto slow efficiency states. Uses more battery on laptops.'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' 'PowerThrottlingOff' 1)) },
+    @{ Id='coreparking'; Cat='Power & CPU'; Name='Disable CPU core parking'; Risk='Moderate'; Presets='X'
+       Desc='Keeps 100% of cores unparked when plugged in. Can smooth out stutter on older Intel/AMD CPUs.'
+       Pwr=@(@{ Sub='SUB_PROCESSOR'; Set='CPMINCORES'; V=100 }) },
+    @{ Id='procmin'; Cat='Power & CPU'; Name='Minimum processor state 100%'; Risk='Moderate'; Presets='X'
+       Desc='CPU never clocks down when plugged in - no ramp-up delay when a heavy frame arrives. More heat and power at idle.'
+       Pwr=@(@{ Sub='SUB_PROCESSOR'; Set='PROCTHROTTLEMIN'; V=100 }) },
+    @{ Id='boostmode'; Cat='Power & CPU'; Name='Aggressive CPU turbo boost'; Risk='Moderate'; Presets='GX'
+       Desc='Processor performance boost mode = Aggressive: turbo kicks in sooner and harder.'
+       Pwr=@(@{ Sub='SUB_PROCESSOR'; Set='PERFBOOSTMODE'; V=2 }) },
+    @{ Id='epp'; Cat='Power & CPU'; Name='Energy-performance preference: max performance'; Risk='Moderate'; Presets='GX'
+       Desc='Tells modern CPUs (Intel Speed Shift / AMD CPPC) to always favour speed over power saving when plugged in.'
+       Pwr=@(@{ Sub='SUB_PROCESSOR'; Set='PERFEPP'; V=0 }) },
+    @{ Id='cooling'; Cat='Power & CPU'; Name='Active cooling policy'; Risk='Safe'; Presets='GX'
+       Desc='Spin the fans up before slowing the CPU down, instead of throttling first.'
+       Pwr=@(@{ Sub='SUB_PROCESSOR'; Set='SYSCOOLPOL'; V=1 }) },
+    @{ Id='aspm'; Cat='Power & CPU'; Name='Disable PCIe link-state power saving'; Risk='Safe'; Presets='GX'
+       Desc='Keeps the PCIe link to your GPU and NVMe drive at full power - removes wake-up latency.'
+       Pwr=@(@{ Sub='SUB_PCIEXPRESS'; Set='ASPM'; V=0 }) },
+    @{ Id='diskidle'; Cat='Power & CPU'; Name='Never power down drives'; Risk='Safe'; Presets='GX'
+       Desc='Stops hard drives spinning down when plugged in (no 2-second hitch when a game loads from it).'
+       Pwr=@(@{ Sub='SUB_DISK'; Set='DISKIDLE'; V=0 }) },
     @{ Id='usbsuspend'; Cat='Power & CPU'; Name='Disable USB selective suspend'; Risk='Safe'; Presets='GX'
        Desc='Stops Windows putting your mouse/keyboard/headset USB ports to sleep (fixes random input lag spikes).'
-       Apply={ powercfg -setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null; powercfg /setactive SCHEME_CURRENT | Out-Null }
-       Revert={ powercfg -setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1 | Out-Null; powercfg /setactive SCHEME_CURRENT | Out-Null }
-       Check={
-           $out = powercfg /query SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226
-           $line = $out | Where-Object { $_ -match 'Current AC Power Setting Index' } | Select-Object -First 1
-           $line -match '0x00000000'
-       } },
+       Pwr=@(@{ Sub=$USB; Set='48e6b7a6-50f5-4782-a5d4-53bb8f07e226'; V=0 }) },
+    @{ Id='usb3lpm'; Cat='Power & CPU'; Name='Disable USB 3 link power management'; Risk='Safe'; Presets='GX'
+       Desc='Keeps USB 3 links fully awake - fixes dropouts on USB audio interfaces, capture cards and VR headsets.'
+       Pwr=@(@{ Sub=$USB; Set='d4e98f31-5ffe-4ce1-be31-1b38b384c009'; V=0 }) },
+    @{ Id='wifipower'; Cat='Power & CPU'; Name='Wi-Fi adapter: maximum performance'; Risk='Safe'; Presets='GX'
+       Desc='Disables Wi-Fi power saving when plugged in. Fixes periodic ping spikes on wireless.'
+       Pwr=@(@{ Sub='19cad1df-c1c9-4d58-9f87-d6fca8b31ec8'; Set='12bbebe6-58d6-4636-95bb-3217ef867c1a'; V=0 }) },
+    @{ Id='fastboot'; Cat='Power & CPU'; Name='Disable Fast Startup'; Risk='Safe'; Presets='GX'
+       Desc='Shut down really shuts down. Fast Startup keeps the kernel hibernated, so driver problems and memory leaks survive "restarts".'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0)) },
+    @{ Id='hibernate'; Cat='Power & CPU'; Name='Disable hibernation'; Risk='Moderate'; Presets='X'
+       Desc='Deletes hiberfil.sys (frees disk space equal to ~40-100% of your RAM). You lose the Hibernate option.'
+       Apply={ Backup-Special 'hibernate' ((Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled') -ne 0); powercfg /hibernate off | Out-Null }
+       Revert={ $b = Pop-Special 'hibernate'; if ($b -and $b.Value) { powercfg /hibernate on | Out-Null } }
+       Check={ (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled') -eq 0 } },
 
-    # ---------------- VISUALS ----------------
-    @{ Id='visualfx'; Cat='Windows Visuals'; Name='Visual effects: best performance'; Risk='Safe'; Presets='GX'
-       Desc='Kills window animations, fades and taskbar animations. Desktop feels snappier, frees a little GPU/CPU.'
-       Reg=@( @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'; N='VisualFXSetting'; V=2},
-              @{P='HKCU:\Control Panel\Desktop\WindowMetrics'; N='MinAnimate'; V='0'; T='String'},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; N='TaskbarAnimations'; V=0} ) },
+    # ============================== MEMORY & STORAGE ==============================
+    @{ Id='sysmain'; Cat='Memory & Storage'; Name='Disable SysMain (Superfetch)'; Risk='Moderate'; Presets='X'
+       Desc='Stops RAM preloading and disk churn. Helps on HDDs and low-RAM PCs; on a fast SSD with 16 GB+ leave it ON.'
+       Svc=@('SysMain') },
+    @{ Id='wsearch'; Cat='Memory & Storage'; Name='Disable Windows Search indexer'; Risk='Moderate'; Presets='X'
+       Desc='Stops background file indexing. Start-menu file search gets slower in exchange.'
+       Svc=@('WSearch') },
+    @{ Id='pagingexec'; Cat='Memory & Storage'; Name='Keep kernel in RAM (DisablePagingExecutive)'; Risk='Moderate'; Presets='X'; Reboot=$true
+       Desc='Kernel and drivers are never paged to disk. Only worthwhile with 16 GB+ RAM.'
+       Reg=@((RegV $MEMK 'DisablePagingExecutive' 1)) },
+    @{ Id='memcompress'; Cat='Memory & Storage'; Name='Disable memory compression'; Risk='Moderate'; Presets='X'; Reboot=$true
+       Desc='Saves the CPU time spent compressing RAM. Only use with 16 GB+ - on low-RAM PCs compression is faster than the page file.'
+       MMA='MemoryCompression' },
+    @{ Id='pagecombine'; Cat='Memory & Storage'; Name='Disable memory page combining'; Risk='Moderate'; Presets='X'
+       Desc='Stops Windows periodically scanning RAM for duplicate pages to merge.'
+       MMA='PageCombining' },
+    @{ Id='prelaunch'; Cat='Memory & Storage'; Name='Disable app pre-launch'; Risk='Moderate'; Presets='X'
+       Desc='Stops Windows pre-loading Store apps it predicts you will open.'
+       MMA='ApplicationPreLaunch' },
+    @{ Id='svchost'; Cat='Memory & Storage'; Name='Group svchost processes by RAM size'; Risk='Moderate'; Presets='X'; Reboot=$true
+       Desc='Sets SvcHostSplitThresholdInKB to your RAM size so Windows runs ~70 svchost.exe instead of ~150. Less overhead, purely cosmetic for some.'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control' 'SvcHostSplitThresholdInKB' $script:RamKB)) },
+    @{ Id='lastaccess'; Cat='Memory & Storage'; Name='Disable NTFS last-access timestamps'; Risk='Safe'; Presets='GX'
+       Desc='Windows stops writing a timestamp every time any file is read. Fewer disk writes when games load thousands of files.'
+       Reg=@((RegV $FSK 'NtfsDisableLastAccessUpdate' -2147483647)) },
+    @{ Id='8dot3'; Cat='Memory & Storage'; Name='Disable 8.3 short filename creation'; Risk='Safe'; Presets='GX'
+       Desc='Stops NTFS creating legacy DOS names (PROGRA~1) for every new file.'
+       Reg=@((RegV $FSK 'NtfsDisable8dot3NameCreation' 1)) },
+    @{ Id='ntfsmem'; Cat='Memory & Storage'; Name='Larger NTFS memory cache'; Risk='Moderate'; Presets='X'; Reboot=$true
+       Desc='Lets NTFS use more RAM for file metadata caching. Helps big game folders and mod packs; 16 GB+ recommended.'
+       Reg=@((RegV $FSK 'NtfsMemoryUsage' 2)) },
+    @{ Id='foldertype'; Cat='Memory & Storage'; Name='Disable folder-type auto-discovery'; Risk='Safe'; Presets='SGX'
+       Desc='Explorer stops scanning folder contents to guess "Pictures/Music" layouts - big folders open much faster.'
+       Reg=@((RegV 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell' 'FolderType' 'NotSpecified' 'String')) },
+    @{ Id='reservedstore'; Cat='Memory & Storage'; Name='Disable reserved storage'; Risk='Moderate'; Presets='X'
+       Applies={ [bool](Get-Command Get-WindowsReservedStorageState -ErrorAction SilentlyContinue) }
+       Desc='Frees the ~7 GB Windows keeps reserved for updates. Updates may need free space later.'
+       Apply={ Backup-Special 'reservedstore' "$((Get-WindowsReservedStorageState).ReservedStorageState)"; Set-WindowsReservedStorageState -State Disabled | Out-Null }
+       Revert={ $b = Pop-Special 'reservedstore'; if ($b -and $b.Value -ne 'Disabled') { Set-WindowsReservedStorageState -State Enabled | Out-Null } }
+       Check={ "$((Get-WindowsReservedStorageState).ReservedStorageState)" -eq 'Disabled' } },
+    @{ Id='storagesense'; Cat='Memory & Storage'; Name='Turn on Storage Sense auto-cleanup'; Risk='Safe'; Presets='SGX'
+       Desc='Windows automatically deletes temp files and old Recycle Bin items when space runs low.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy' '01' 1)) },
 
-    @{ Id='transparency'; Cat='Windows Visuals'; Name='Disable transparency effects'; Risk='Safe'; Presets='GX'
-       Desc='Removes the blur/acrylic effect on taskbar and Start. Saves GPU work, especially on integrated graphics.'
-       Reg=@( @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'; N='EnableTransparency'; V=0} ) },
-
-    @{ Id='menudelay'; Cat='Windows Visuals'; Name='Instant menus + no startup delay'; Risk='Safe'; Presets='SGX'
-       Desc='Menus open instantly (MenuShowDelay 0) and startup apps launch without the artificial 10 s delay.'
-       Reg=@( @{P='HKCU:\Control Panel\Desktop'; N='MenuShowDelay'; V='0'; T='String'},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize'; N='StartupDelayInMSec'; V=0} ) },
-
-    # ---------------- BACKGROUND / PRIVACY ----------------
-    @{ Id='bgapps'; Cat='Background & Privacy'; Name='Block background Store apps'; Risk='Safe'; Presets='SGX'
-       Desc='Stops Microsoft Store apps running in the background when you are not using them.'
-       Reg=@( @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'; N='GlobalUserDisabled'; V=1},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'; N='BackgroundAppGlobalToggle'; V=0} ) },
-
-    @{ Id='telemetry'; Cat='Background & Privacy'; Name='Disable telemetry + tracking services'; Risk='Safe'; Presets='SGX'
-       Desc='Turns off DiagTrack (Connected User Experiences) and the WAP push service that feed data to Microsoft.'
-       Apply={
-           Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' 'AllowTelemetry' 0
-           Set-ServiceStart 'DiagTrack' 4; Set-ServiceStart 'dmwappushservice' 4
-       }
-       Revert={
-           Restore-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' 'AllowTelemetry'
-           Restore-ServiceStart 'DiagTrack'; Restore-ServiceStart 'dmwappushservice'
-       }
-       Check={ (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack' 'Start') -eq 4 } },
-
-    @{ Id='ads'; Cat='Background & Privacy'; Name='Disable ads, tips and suggested apps'; Risk='Safe'; Presets='SGX'
-       Desc='No more Start menu ads, "tips", lock-screen spam or silently installed suggested apps.'
-       Reg=@( @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; N='SilentInstalledAppsEnabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; N='SystemPaneSuggestionsEnabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; N='SubscribedContent-338388Enabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; N='SubscribedContent-338389Enabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; N='SoftLandingEnabled'; V=0},
-              @{P='HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; N='Enabled'; V=0} ) },
-
-    @{ Id='sysmain'; Cat='Background & Privacy'; Name='Disable SysMain (Superfetch)'; Risk='Moderate'; Presets='X'
-       Desc='Stops RAM preloading + disk churn. Helps on HDDs and low-RAM PCs; on a fast SSD with 16 GB+ leave it ON.'
-       Apply={ Set-ServiceStart 'SysMain' 4 }
-       Revert={ Restore-ServiceStart 'SysMain' }
-       Check={ (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain' 'Start') -eq 4 } },
-
-    @{ Id='wsearch'; Cat='Background & Privacy'; Name='Disable Windows Search indexer'; Risk='Moderate'; Presets='X'
-       Desc='Stops background file indexing. Start-menu file search becomes slower in exchange.'
-       Apply={ Set-ServiceStart 'WSearch' 4 }
-       Revert={ Restore-ServiceStart 'WSearch' }
-       Check={ (Get-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' 'Start') -eq 4 } },
-
-    # ---------------- NETWORK ----------------
+    # ============================== NETWORK ==============================
     @{ Id='netthrottle'; Cat='Network'; Name='Disable network throttling'; Risk='Safe'; Presets='GX'
        Desc='Removes the packet-rate cap Windows applies while multimedia is playing (NetworkThrottlingIndex).'
-       Reg=@( @{P='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; N='NetworkThrottlingIndex'; V=-1} ) },
-
+       Reg=@((RegV $MM 'NetworkThrottlingIndex' -1)) },
     @{ Id='nagle'; Cat='Network'; Name="Disable Nagle's algorithm (lower ping)"; Risk='Safe'; Presets='GX'
-       Desc='Sends small game packets immediately instead of bundling them. Can shave a few ms of input-to-server delay.'
+       Desc='Sends small game packets immediately instead of bundling them. Can shave a few ms off input-to-server delay.'
        Apply={ foreach ($k in Get-NetInterfaceKeys) { Set-Reg $k 'TcpAckFrequency' 1; Set-Reg $k 'TCPNoDelay' 1 } }
        Revert={ foreach ($k in Get-NetInterfaceKeys) { Restore-Reg $k 'TcpAckFrequency'; Restore-Reg $k 'TCPNoDelay' } }
-       Check={ $ks = @(Get-NetInterfaceKeys); $ks.Count -gt 0 -and -not ($ks | Where-Object { (Get-RegValue $_ 'TCPNoDelay') -ne 1 }) } }
+       Check={ $ks = @(Get-NetInterfaceKeys); $ks.Count -gt 0 -and -not ($ks | Where-Object { (Get-RegValue $_ 'TCPNoDelay') -ne 1 }) } },
+    @{ Id='deliveryopt'; Cat='Network'; Name='Stop uploading updates to other PCs'; Risk='Safe'; Presets='SGX'
+       Desc='Disables Delivery Optimization peer-to-peer sharing, so Windows does not use your upload bandwidth (and ping) to seed updates.'
+       Reg=@((RegV "$PW\DeliveryOptimization" 'DODownloadMode' 0)) },
+    @{ Id='dns'; Cat='Network'; Name='Use Cloudflare DNS (1.1.1.1)'; Risk='Moderate'; Presets='X'
+       Desc='Faster, private name lookups on your active adapters. Does not lower in-game ping. Revert restores your previous DNS.'
+       Applies={ $script:NetAdapters.Count -gt 0 }
+       Apply={
+           foreach ($a in $script:NetAdapters) {
+               $k = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$($a.InterfaceGuid)"
+               if (-not $script:Backup.ContainsKey("$k|NameServer")) {
+                   $v = Get-RegValue $k 'NameServer'
+                   $script:Backup["$k|NameServer"] = @{ Existed = ($null -ne $v); Value = $v; Type = 'String' }; Save-Backup
+               }
+               Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses '1.1.1.1', '1.0.0.1'
+           }
+           Clear-DnsClientCache
+       }
+       Revert={
+           foreach ($a in $script:NetAdapters) {
+               $k = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$($a.InterfaceGuid)"
+               if (-not $script:Backup.ContainsKey("$k|NameServer")) { continue }
+               $old = "$($script:Backup["$k|NameServer"].Value)"
+               $script:Backup.Remove("$k|NameServer"); Save-Backup
+               if ($old) { Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses ($old -split '[, ]+' | Where-Object { $_ }) }
+               else { Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses }
+           }
+           Clear-DnsClientCache
+       }
+       Check={ [bool]($script:NetAdapters | Where-Object { (Get-DnsClientServerAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4).ServerAddresses -contains '1.1.1.1' }) } },
+    @{ Id='eee'; Cat='Network'; Name='Disable Energy-Efficient Ethernet'; Risk='Moderate'; Presets='GX'
+       Desc='Stops the network card dozing between packets - removes small latency spikes. Network drops for a second when applied.'
+       Nic=@{ K=@('*EEE'); V='0' } },
+    @{ Id='intmod'; Cat='Network'; Name='Disable interrupt moderation'; Risk='Advanced'; Presets='X'
+       Desc='Every packet is handled immediately instead of in batches. Lowest latency, higher CPU use. Network drops for a second.'
+       Nic=@{ K=@('*InterruptModeration'); V='0' } },
+    @{ Id='flowctrl'; Cat='Network'; Name='Disable Ethernet flow control'; Risk='Moderate'; Presets='X'
+       Desc='Stops the switch/router pausing your adapter during congestion. Network drops for a second.'
+       Nic=@{ K=@('*FlowControl'); V='0' } },
+    @{ Id='lso'; Cat='Network'; Name='Disable Large Send Offload'; Risk='Moderate'; Presets='X'
+       Desc='Packets are segmented by Windows instead of the NIC - fixes latency spikes on some Realtek/Intel adapters.'
+       Nic=@{ K=@('*LsoV2IPv4', '*LsoV2IPv6'); V='0' } },
+    @{ Id='nicpower'; Cat='Network'; Name='Network adapter never sleeps'; Risk='Safe'; Presets='GX'
+       Desc='Unticks "Allow the computer to turn off this device to save power" on your active adapters.'
+       Applies={ [bool]($script:NetAdapters | ForEach-Object { Get-NetAdapterPowerManagement -Name $_.Name -ErrorAction SilentlyContinue } | Where-Object { "$($_.AllowComputerToTurnOffDevice)" -in 'Enabled', 'Disabled' }) }
+       Apply={
+           foreach ($a in $script:NetAdapters) {
+               $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue
+               if (-not $pm -or "$($pm.AllowComputerToTurnOffDevice)" -notin 'Enabled', 'Disabled') { continue }
+               Backup-Special "nicpm|$($a.InterfaceGuid)" "$($pm.AllowComputerToTurnOffDevice)"
+               Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled
+           }
+       }
+       Revert={
+           foreach ($a in $script:NetAdapters) {
+               $b = Pop-Special "nicpm|$($a.InterfaceGuid)"
+               if ($b -and $b.Value -eq 'Enabled') { Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Enabled }
+           }
+       }
+       Check={ -not ($script:NetAdapters | ForEach-Object { Get-NetAdapterPowerManagement -Name $_.Name -ErrorAction SilentlyContinue } | Where-Object { "$($_.AllowComputerToTurnOffDevice)" -eq 'Enabled' }) } },
+    @{ Id='llmnr'; Cat='Network'; Name='Disable LLMNR (security)'; Risk='Safe'; Presets='SGX'
+       Desc='Turns off a legacy name-lookup protocol that attackers on public Wi-Fi abuse to steal password hashes.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' 'EnableMulticast' 0)) },
+    @{ Id='smb1'; Cat='Network'; Name='Disable SMBv1 (security)'; Risk='Safe'; Presets='SGX'
+       Desc='Removes the ancient file-sharing protocol used by WannaCry. Modern devices use SMB2/3.'
+       Applies={ [bool](Get-Command Get-SmbServerConfiguration -ErrorAction SilentlyContinue) }
+       Apply={ Backup-Special 'smb1' ([bool](Get-SmbServerConfiguration).EnableSMB1Protocol); Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force }
+       Revert={ $b = Pop-Special 'smb1'; if ($b -and $b.Value) { Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force } }
+       Check={ -not (Get-SmbServerConfiguration).EnableSMB1Protocol } },
+    @{ Id='wifisense'; Cat='Network'; Name='Disable Wi-Fi Sense hotspot auto-connect'; Risk='Safe'; Presets='SGX'
+       Desc='Stops Windows auto-joining open "suggested" hotspots.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowAutoConnectToWiFiSenseHotspots' 'value' 0),
+             (RegV 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowWiFiHotSpotReporting' 'value' 0)) },
+    @{ Id='remoteassist'; Cat='Network'; Name='Disable Remote Assistance (security)'; Risk='Safe'; Presets='SGX'
+       Desc='Blocks Remote Assistance invitations - a favourite of "tech support" scammers.'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance' 'fAllowToGetHelp' 0)) },
+
+    # ============================== WINDOWS VISUALS ==============================
+    @{ Id='visualfx'; Cat='Windows Visuals'; Name='Visual effects: best performance'; Risk='Safe'; Presets='GX'
+       Desc='Kills window minimize/maximize and taskbar animations. Desktop feels snappier, frees a little GPU/CPU.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' 'VisualFXSetting' 2),
+             (RegV "$DESK\WindowMetrics" 'MinAnimate' '0' 'String'), (RegV $ADV 'TaskbarAnimations' 0)) },
+    @{ Id='transparency'; Cat='Windows Visuals'; Name='Disable transparency effects'; Risk='Safe'; Presets='GX'
+       Desc='Removes the blur/acrylic effect on taskbar and Start. Saves GPU work, especially on integrated graphics.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'EnableTransparency' 0)) },
+    @{ Id='menudelay'; Cat='Windows Visuals'; Name='Instant menus + no startup-app delay'; Risk='Safe'; Presets='SGX'
+       Desc='Menus open instantly and startup apps launch without the artificial 10 s delay.'
+       Reg=@((RegV $DESK 'MenuShowDelay' '0' 'String'), (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize' 'StartupDelayInMSec' 0)) },
+    @{ Id='aeropeek'; Cat='Windows Visuals'; Name='Disable Aero Peek'; Risk='Safe'; Presets='GX'
+       Desc='No more desktop preview when the mouse touches the bottom-right corner.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\DWM' 'EnableAeroPeek' 0)) },
+    @{ Id='smoothscroll'; Cat='Windows Visuals'; Name='Disable smooth-scrolling animation'; Risk='Safe'; Presets='X'
+       Desc='List boxes jump instantly instead of animating.'
+       Reg=@((RegV $DESK 'SmoothScroll' 0)) },
+    @{ Id='listviewfx'; Cat='Windows Visuals'; Name='Disable icon shadows + translucent selection'; Risk='Safe'; Presets='GX'
+       Desc='Removes desktop icon label drop shadows and the alpha-blended selection rectangle.'
+       Reg=@((RegV $ADV 'ListviewAlphaSelect' 0), (RegV $ADV 'ListviewShadow' 0)) },
+    @{ Id='dragfull'; Cat='Windows Visuals'; Name='Show outline while dragging windows'; Risk='Safe'; Presets='X'
+       Desc='Windows are not redrawn continuously while you move them.'
+       Reg=@((RegV $DESK 'DragFullWindows' '0' 'String')) },
+    @{ Id='logonblur'; Cat='Windows Visuals'; Name='Disable sign-in screen blur'; Risk='Safe'; Presets='GX'
+       Desc='The lock/sign-in background is shown sharp instead of with the acrylic blur.'
+       Reg=@((RegV "$PW\System" 'DisableAcrylicBackgroundOnLogon' 1)) },
+    @{ Id='lockscreen'; Cat='Windows Visuals'; Name='Skip the lock screen'; Risk='Safe'; Presets='X'
+       Desc='Go straight to the password/PIN box (Pro/Enterprise editions honour this policy).'
+       Reg=@((RegV "$PW\Personalization" 'NoLockScreen' 1)) },
+    @{ Id='startupsound'; Cat='Windows Visuals'; Name='Disable Windows startup sound'; Risk='Safe'; Presets='X'
+       Desc='Silences the sound played at sign-in.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\BootAnimation' 'DisableStartupSound' 1)) },
+    @{ Id='darkmode'; Cat='Windows Visuals'; Name='Dark mode everywhere'; Risk='Safe'; Presets=''
+       Desc='Dark theme for Windows and apps. Because it looks cool.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' 0),
+             (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'SystemUsesLightTheme' 0)) },
+    @{ Id='wallpaperq'; Cat='Windows Visuals'; Name='Full-quality wallpaper'; Risk='Safe'; Presets=''
+       Desc='Windows stops re-compressing your wallpaper to 85% JPEG quality.'
+       Reg=@((RegV $DESK 'JPEGImportQuality' 100)) },
+
+    # ============================== EXPLORER & TASKBAR ==============================
+    @{ Id='fileext'; Cat='Explorer & Taskbar'; Name='Show file extensions'; Risk='Safe'; Presets='SGX'
+       Desc='See "virus.pdf.exe" for what it really is. Security win as much as convenience.'
+       Reg=@((RegV $ADV 'HideFileExt' 0)) },
+    @{ Id='hiddenfiles'; Cat='Explorer & Taskbar'; Name='Show hidden files'; Risk='Safe'; Presets=''
+       Desc='Shows hidden files and folders like AppData (where .minecraft lives).'
+       Reg=@((RegV $ADV 'Hidden' 1)) },
+    @{ Id='thispc'; Cat='Explorer & Taskbar'; Name='Explorer opens to This PC'; Risk='Safe'; Presets=''
+       Desc='File Explorer opens on your drives instead of Home/Quick access.'
+       Reg=@((RegV $ADV 'LaunchTo' 1)) },
+    @{ Id='quickaccess'; Cat='Explorer & Taskbar'; Name='Hide recent/frequent files in Explorer'; Risk='Safe'; Presets=''
+       Desc='Explorer Home stops listing recently opened files and folders (faster, more private).'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'ShowRecent' 0),
+             (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'ShowFrequent' 0)) },
+    @{ Id='classicmenu'; Cat='Explorer & Taskbar'; Name='Classic right-click menu (Windows 11)'; Risk='Safe'; Presets=''; Applies={ $script:IsWin11 }
+       Desc='Brings back the full right-click menu without "Show more options". Restart Explorer to see it.'
+       Apply={ $k = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'; New-Item -Path $k -Force | Out-Null; Set-ItemProperty -Path $k -Name '(default)' -Value '' }
+       Revert={ Remove-Item -Path 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}' -Recurse -Force -ErrorAction SilentlyContinue }
+       Check={ Test-Path 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' } },
+    @{ Id='widgets'; Cat='Explorer & Taskbar'; Name='Disable Widgets board'; Risk='Safe'; Presets='SGX'; Applies={ $script:IsWin11 }
+       Desc='Removes Widgets and its background Edge WebView processes (saves 100-300 MB RAM).'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' 0)) },
+    @{ Id='newsinterests'; Cat='Explorer & Taskbar'; Name='Disable News and Interests (Windows 10)'; Risk='Safe'; Presets='SGX'; Applies={ -not $script:IsWin11 }
+       Desc='Removes the weather/news taskbar widget and its background process.'
+       Reg=@((RegV "$PW\Windows Feeds" 'EnableFeeds' 0)) },
+    @{ Id='taskview'; Cat='Explorer & Taskbar'; Name='Hide Task View button'; Risk='Safe'; Presets=''
+       Desc='Removes the Task View button from the taskbar (Win+Tab still works).'
+       Reg=@((RegV $ADV 'ShowTaskViewButton' 0)) },
+    @{ Id='chaticon'; Cat='Explorer & Taskbar'; Name='Remove Teams Chat icon'; Risk='Safe'; Presets='SGX'; Applies={ $script:IsWin11 }
+       Desc='Removes the consumer Teams "Chat" button from the taskbar.'
+       Reg=@((RegV "$PW\Windows Chat" 'ChatIcon' 3)) },
+    @{ Id='searchbox'; Cat='Explorer & Taskbar'; Name='Taskbar search: icon only'; Risk='Safe'; Presets=''
+       Desc='Shrinks the big taskbar search box to an icon.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'SearchboxTaskbarMode' 1)) },
+    @{ Id='copilot'; Cat='Explorer & Taskbar'; Name='Disable Copilot'; Risk='Safe'; Presets='SGX'; Applies={ $script:IsWin11 }
+       Desc='Removes the Copilot button and sidebar.'
+       Reg=@((RegV 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot' 1), (RegV $ADV 'ShowCopilotButton' 0)) },
+    @{ Id='recall'; Cat='Explorer & Taskbar'; Name='Disable Recall snapshots'; Risk='Safe'; Presets='SGX'; Applies={ $script:IsWin11 }
+       Desc='Stops Windows taking screenshots of everything you do (Copilot+ PCs). Saves disk, CPU and privacy.'
+       Reg=@((RegV 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis' 1)) },
+    @{ Id='taskbarleft'; Cat='Explorer & Taskbar'; Name='Left-aligned taskbar'; Risk='Safe'; Presets=''; Applies={ $script:IsWin11 }
+       Desc='Start button back in the corner, Windows 10 style.'
+       Reg=@((RegV $ADV 'TaskbarAl' 0)) },
+    @{ Id='endtask'; Cat='Explorer & Taskbar'; Name='"End task" on taskbar right-click'; Risk='Safe'; Presets='GX'; Applies={ $script:IsWin11 }
+       Desc='Right-click a frozen game on the taskbar and kill it instantly - no Task Manager needed.'
+       Reg=@((RegV "$ADV\TaskbarDeveloperSettings" 'TaskbarEndTask' 1)) },
+    @{ Id='fullpath'; Cat='Explorer & Taskbar'; Name='Show full path in Explorer title'; Risk='Safe'; Presets=''
+       Desc='Shows the complete folder path in the Explorer title bar.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState' 'FullPath' 1)) },
+    @{ Id='shortcuttext'; Cat='Explorer & Taskbar'; Name='No "- Shortcut" on new shortcuts'; Risk='Safe'; Presets=''
+       Desc='New shortcuts are named "Minecraft" instead of "Minecraft - Shortcut".'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'link' ([byte[]](0, 0, 0, 0)) 'Binary')) },
+    @{ Id='aeroshake'; Cat='Explorer & Taskbar'; Name='Disable Aero Shake'; Risk='Safe'; Presets='GX'
+       Desc='Shaking a window no longer minimizes every other window.'
+       Reg=@((RegV $ADV 'DisallowShaking' 1)) },
+    @{ Id='iconcache'; Cat='Explorer & Taskbar'; Name='Bigger icon cache'; Risk='Safe'; Presets='GX'
+       Desc='Raises the icon cache to 4096 entries so Explorer and the desktop redraw icons faster.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' 'Max Cached Icons' '4096' 'String')) },
+
+    # ============================== ADS & NOTIFICATIONS ==============================
+    @{ Id='ads'; Cat='Ads & Notifications'; Name='Disable Start ads, tips and suggested apps'; Risk='Safe'; Presets='SGX'
+       Desc='No more Start menu ads, "tips", or silently installed suggested apps (Candy Crush & co).'
+       Reg=@((RegV $CDM 'SilentInstalledAppsEnabled' 0), (RegV $CDM 'SystemPaneSuggestionsEnabled' 0), (RegV $CDM 'SubscribedContent-338388Enabled' 0),
+             (RegV $CDM 'SubscribedContent-338389Enabled' 0), (RegV $CDM 'SoftLandingEnabled' 0), (RegV $CDM 'PreInstalledAppsEnabled' 0),
+             (RegV $CDM 'OemPreInstalledAppsEnabled' 0)) },
+    @{ Id='lockscreentips'; Cat='Ads & Notifications'; Name='Disable lock-screen fun facts and tips'; Risk='Safe'; Presets='SGX'
+       Desc='Removes the "fun facts, tips and tricks" text on the lock screen.'
+       Reg=@((RegV $CDM 'RotatingLockScreenOverlayEnabled' 0), (RegV $CDM 'SubscribedContent-338387Enabled' 0)) },
+    @{ Id='spotlight'; Cat='Ads & Notifications'; Name='Disable Windows Spotlight'; Risk='Safe'; Presets='X'
+       Desc='Stops downloading rotating lock-screen images and the "Learn about this picture" desktop icon.'
+       Reg=@((RegV $CDM 'RotatingLockScreenEnabled' 0), (RegV 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent' 'DisableWindowsSpotlightFeatures' 1)) },
+    @{ Id='settingsads'; Cat='Ads & Notifications'; Name='Disable suggestions in Settings'; Risk='Safe'; Presets='SGX'
+       Desc='Removes promoted content and "suggested" cards inside the Settings app.'
+       Reg=@((RegV $CDM 'SubscribedContent-338393Enabled' 0), (RegV $CDM 'SubscribedContent-353694Enabled' 0), (RegV $CDM 'SubscribedContent-353696Enabled' 0)) },
+    @{ Id='welcome'; Cat='Ads & Notifications'; Name='Disable "Windows welcome experience"'; Risk='Safe'; Presets='SGX'
+       Desc='No more full-screen "what''s new" pages after updates.'
+       Reg=@((RegV $CDM 'SubscribedContent-310093Enabled' 0)) },
+    @{ Id='scoobe'; Cat='Ads & Notifications'; Name='Disable "Finish setting up your device" nag'; Risk='Safe'; Presets='SGX'
+       Desc='Stops the full-screen nag pushing Microsoft 365, OneDrive and Game Pass after updates.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' 'ScoobeSystemSettingEnabled' 0)) },
+    @{ Id='startrecs'; Cat='Ads & Notifications'; Name='Disable Start menu promotions'; Risk='Safe'; Presets='SGX'
+       Desc='Removes promoted tips/apps from the Start "Recommended" section.'
+       Reg=@((RegV $ADV 'Start_IrisRecommendations' 0)) },
+    @{ Id='syncads'; Cat='Ads & Notifications'; Name='Disable OneDrive ads in Explorer'; Risk='Safe'; Presets='SGX'
+       Desc='Removes sync-provider "notifications" (OneDrive/M365 ads) inside File Explorer.'
+       Reg=@((RegV $ADV 'ShowSyncProviderNotifications' 0)) },
+    @{ Id='consumer'; Cat='Ads & Notifications'; Name='Disable Microsoft consumer experiences'; Risk='Safe'; Presets='SGX'
+       Desc='Policy that blocks auto-installed third-party apps and promotional tiles.'
+       Reg=@((RegV "$PW\CloudContent" 'DisableWindowsConsumerFeatures' 1), (RegV "$PW\CloudContent" 'DisableSoftLanding' 1)) },
+    @{ Id='accountnotif'; Cat='Ads & Notifications'; Name='Disable Microsoft account nags in Start'; Risk='Safe'; Presets='SGX'
+       Desc='Removes "Back up your PC / sign in to Microsoft" badges on the Start account menu.'
+       Reg=@((RegV $ADV 'Start_AccountNotifications' 0)) },
+    @{ Id='feedbackfreq'; Cat='Ads & Notifications'; Name='Never ask for feedback'; Risk='Safe'; Presets='SGX'
+       Desc='Windows stops popping up "How likely are you to recommend Windows?" surveys.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Siuf\Rules' 'NumberOfSIUFInPeriod' 0), (RegV "$PW\DataCollection" 'DoNotShowFeedbackNotifications' 1)) },
+    @{ Id='bingsearch'; Cat='Ads & Notifications'; Name='Disable Bing web results in Start search'; Risk='Safe'; Presets='SGX'
+       Desc='Start search only searches your PC - noticeably faster and no web junk.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'BingSearchEnabled' 0),
+             (RegV 'HKCU:\Software\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions' 1)) },
+    @{ Id='searchhl'; Cat='Ads & Notifications'; Name='Disable search highlights'; Risk='Safe'; Presets='SGX'
+       Desc='Removes the daily doodles/trending content in the search box and panel.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings' 'IsDynamicSearchBoxEnabled' 0)) },
+    @{ Id='cortana'; Cat='Ads & Notifications'; Name='Disable Cortana'; Risk='Safe'; Presets='SGX'
+       Desc='Turns Cortana off via policy.'
+       Reg=@((RegV "$PW\Windows Search" 'AllowCortana' 0)) },
+    @{ Id='toasts'; Cat='Ads & Notifications'; Name='Disable all Windows toast notifications'; Risk='Moderate'; Presets='X'
+       Desc='Silences every Windows pop-up notification (apps can still show their own in-app alerts).'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled' 0)) },
+
+    # ============================== PRIVACY & TELEMETRY ==============================
+    @{ Id='telemetry'; Cat='Privacy & Telemetry'; Name='Disable telemetry + tracking services'; Risk='Safe'; Presets='SGX'
+       Desc='Minimum diagnostic data, and turns off DiagTrack (Connected User Experiences) and the WAP push service.'
+       Reg=@((RegV "$PW\DataCollection" 'AllowTelemetry' 0)); Svc=@('DiagTrack', 'dmwappushservice') },
+    @{ Id='adid'; Cat='Privacy & Telemetry'; Name='Disable advertising ID'; Risk='Safe'; Presets='SGX'
+       Desc='Apps can no longer use a per-user ID to profile you for ads.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' 'Enabled' 0), (RegV "$PW\AdvertisingInfo" 'DisabledByGroupPolicy' 1)) },
+    @{ Id='activity'; Cat='Privacy & Telemetry'; Name='Disable activity history'; Risk='Safe'; Presets='SGX'
+       Desc='Windows stops logging which apps/files you use and uploading that timeline.'
+       Reg=@((RegV "$PW\System" 'EnableActivityFeed' 0), (RegV "$PW\System" 'PublishUserActivities' 0), (RegV "$PW\System" 'UploadUserActivities' 0)) },
+    @{ Id='location'; Cat='Privacy & Telemetry'; Name='Disable location access'; Risk='Moderate'; Presets='X'
+       Desc='Blocks apps and Windows from using your location (weather/maps will ask you for a city).'
+       Reg=@((RegV "$CS\location" 'Value' 'Deny' 'String')) },
+    @{ Id='appdiag'; Cat='Privacy & Telemetry'; Name='Block apps reading diagnostic info'; Risk='Safe'; Presets='SGX'
+       Desc='Store apps can no longer read diagnostic data about other running apps.'
+       Reg=@((RegV "$CS\appDiagnostics" 'Value' 'Deny' 'String')) },
+    @{ Id='tailored'; Cat='Privacy & Telemetry'; Name='Disable tailored experiences'; Risk='Safe'; Presets='SGX'
+       Desc='Microsoft stops using your diagnostic data for personalised tips and ads.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy' 'TailoredExperiencesWithDiagnosticDataEnabled' 0)) },
+    @{ Id='inking'; Cat='Privacy & Telemetry'; Name='Disable typing & inking personalisation'; Risk='Safe'; Presets='SGX'
+       Desc='Stops collecting what you type and write to build a personal dictionary in the cloud.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\InputPersonalization' 'RestrictImplicitInkCollection' 1),
+             (RegV 'HKCU:\Software\Microsoft\InputPersonalization' 'RestrictImplicitTextCollection' 1),
+             (RegV 'HKCU:\Software\Microsoft\InputPersonalization\TrainedDataStore' 'HarvestContacts' 0),
+             (RegV 'HKCU:\Software\Microsoft\Personalization\Settings' 'AcceptedPrivacyPolicy' 0)) },
+    @{ Id='speech'; Cat='Privacy & Telemetry'; Name='Disable online speech recognition'; Risk='Safe'; Presets='SGX'
+       Desc='Voice input is no longer sent to Microsoft servers.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy' 'HasAccepted' 0)) },
+    @{ Id='apptrack'; Cat='Privacy & Telemetry'; Name='Disable app-launch tracking'; Risk='Safe'; Presets='SGX'
+       Desc='Windows stops tracking which apps you launch (removes "Most used" in Start).'
+       Reg=@((RegV $ADV 'Start_TrackProgs' 0)) },
+    @{ Id='doctrack'; Cat='Privacy & Telemetry'; Name='Disable recent documents tracking'; Risk='Safe'; Presets=''
+       Desc='No recent files in Start, Jump Lists and Explorer.'
+       Reg=@((RegV $ADV 'Start_TrackDocs' 0)) },
+    @{ Id='langlist'; Cat='Privacy & Telemetry'; Name='Hide language list from websites'; Risk='Safe'; Presets='SGX'
+       Desc='Websites can no longer read your installed language list for fingerprinting.'
+       Reg=@((RegV 'HKCU:\Control Panel\International\User Profile' 'HttpAcceptLanguageOptOut' 1)) },
+    @{ Id='wer'; Cat='Privacy & Telemetry'; Name='Disable Windows Error Reporting'; Risk='Safe'; Presets='GX'
+       Desc='Crashes are no longer packaged and uploaded to Microsoft (no more "checking for a solution" hang after a game crash).'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' 'Disabled' 1)) },
+    @{ Id='ceip'; Cat='Privacy & Telemetry'; Name='Disable Customer Experience Program'; Risk='Safe'; Presets='SGX'
+       Desc='Opts out of the CEIP / SQM usage data program.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Microsoft\SQMClient\Windows' 'CEIPEnable' 0)) },
+    @{ Id='appcompat'; Cat='Privacy & Telemetry'; Name='Disable app-compatibility telemetry'; Risk='Safe'; Presets='SGX'
+       Desc='Stops the inventory collector and application telemetry engine.'
+       Reg=@((RegV "$PW\AppCompat" 'AITEnable' 0), (RegV "$PW\AppCompat" 'DisableInventory' 1)) },
+    @{ Id='clipsync'; Cat='Privacy & Telemetry'; Name='Disable cloud clipboard sync'; Risk='Safe'; Presets='SGX'
+       Desc='Clipboard contents are no longer synced across devices through Microsoft.'
+       Reg=@((RegV "$PW\System" 'AllowCrossDeviceClipboard' 0)) },
+    @{ Id='handwriting'; Cat='Privacy & Telemetry'; Name='Disable handwriting data sharing'; Risk='Safe'; Presets='SGX'
+       Desc='Pen handwriting samples are not sent to Microsoft.'
+       Reg=@((RegV "$PW\TabletPC" 'PreventHandwritingDataSharing' 1)) },
+    @{ Id='devtelemetry'; Cat='Privacy & Telemetry'; Name='Opt out of PowerShell / .NET CLI telemetry'; Risk='Safe'; Presets='SGX'
+       Desc='Sets the official opt-out environment variables for PowerShell 7 and the dotnet CLI.'
+       Reg=@((RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' 'POWERSHELL_TELEMETRY_OPTOUT' '1' 'String'),
+             (RegV 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' 'DOTNET_CLI_TELEMETRY_OPTOUT' '1' 'String')) },
+
+    # ============================== SCHEDULED TASKS ==============================
+    (TaskT 't_appraiser' 'Disable Compatibility Appraiser' 'Safe' 'SGX' @('\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser*') 'The telemetry task infamous for random 100% CPU/disk spikes (CompatTelRunner.exe).'),
+    (TaskT 't_pdu' 'Disable ProgramDataUpdater' 'Safe' 'SGX' @('\Microsoft\Windows\Application Experience\ProgramDataUpdater', '\Microsoft\Windows\Application Experience\AitAgent') 'Collects program telemetry for the Customer Experience program.'),
+    (TaskT 't_ceip' 'Disable CEIP tasks' 'Safe' 'SGX' @('\Microsoft\Windows\Customer Experience Improvement Program\*') 'Consolidator, USB CEIP and kernel CEIP data collectors.'),
+    (TaskT 't_feedback' 'Disable feedback (SIUF) tasks' 'Safe' 'SGX' @('\Microsoft\Windows\Feedback\Siuf\*') 'Background tasks that download and schedule feedback surveys.'),
+    (TaskT 't_wer' 'Disable error-report queue task' 'Safe' 'GX' @('\Microsoft\Windows\Windows Error Reporting\QueueReporting') 'Uploads queued crash reports in the background.'),
+    (TaskT 't_maps' 'Disable Maps update/toast tasks' 'Safe' 'SGX' @('\Microsoft\Windows\Maps\*') 'Offline map updates and map notifications.'),
+    (TaskT 't_diskdiag' 'Disable disk diagnostic data collector' 'Safe' 'SGX' @('\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector') 'Sends disk diagnostic data to Microsoft.'),
+    (TaskT 't_autochk' 'Disable Autochk proxy task' 'Safe' 'SGX' @('\Microsoft\Windows\Autochk\Proxy') 'Collects and uploads SQM data on boot.'),
+    (TaskT 't_cloudexp' 'Disable CloudExperienceHost task' 'Safe' 'GX' @('\Microsoft\Windows\CloudExperienceHost\CreateObjectTask') 'Background task for out-of-box/upsell experiences.'),
+    (TaskT 't_devcensus' 'Disable Device Census' 'Safe' 'SGX' @('\Microsoft\Windows\Device Information\Device*') 'Inventories your hardware for telemetry.'),
+    (TaskT 't_powerdiag' 'Disable power efficiency diagnostics' 'Safe' 'SGX' @('\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem') 'Periodic power analysis that can spike the CPU.'),
+    (TaskT 't_family' 'Disable Family Safety tasks' 'Safe' 'GX' @('\Microsoft\Windows\Shell\FamilySafety*') 'Only needed if this PC uses Microsoft Family parental controls.'),
+    (TaskT 't_office' 'Disable Office telemetry tasks' 'Safe' 'SGX' @('\Microsoft\Office\OfficeTelemetryAgent*') 'Office telemetry agent logon/fallback tasks.'),
+    (TaskT 't_nvidia' 'Disable NVIDIA telemetry tasks' 'Safe' 'GX' @('\NvTm*') 'NVIDIA crash/telemetry report tasks. Driver unaffected.'),
+    (TaskT 't_xblsave' 'Disable Xbox game-save sync task' 'Moderate' '' @('\Microsoft\XblGameSave\XblGameSaveTask') 'Breaks Xbox/Game Pass cloud saves - only if you do not use them.'),
+    (TaskT 't_edgeupd' 'Disable Edge auto-update tasks' 'Moderate' 'X' @('\MicrosoftEdgeUpdateTaskMachine*') 'Edge stops checking for updates in the background (it still updates when opened).'),
+    (TaskT 't_googleupd' 'Disable Google auto-update tasks' 'Moderate' 'X' @('\GoogleUpdateTaskMachine*', '\GoogleSystem\GoogleUpdater\*') 'Chrome stops checking for updates in the background (it still updates when opened).'),
+
+    # ============================== SERVICES ==============================
+    (SvcT 's_fax' 'Disable Fax service' 'Safe' 'SGX' @('Fax') 'Nobody has faxed since 2003.'),
+    (SvcT 's_remotereg' 'Disable Remote Registry' 'Safe' 'SGX' @('RemoteRegistry') 'Blocks remote editing of your registry over the network (security).'),
+    (SvcT 's_insider' 'Disable Windows Insider service' 'Safe' 'SGX' @('wisvc') 'Only needed if you are in the Insider preview program.'),
+    (SvcT 's_retail' 'Disable Retail Demo service' 'Safe' 'SGX' @('RetailDemo') 'For store display PCs only.'),
+    (SvcT 's_maps' 'Disable Downloaded Maps Manager' 'Safe' 'SGX' @('MapsBroker') 'Manages offline maps for the Maps app.'),
+    (SvcT 's_wmpnet' 'Disable WMP network sharing' 'Safe' 'SGX' @('WMPNetworkSvc') 'Windows Media Player library sharing over the network.'),
+    (SvcT 's_parental' 'Disable Parental Controls service' 'Safe' 'GX' @('WpcMonSvc') 'Only needed for Microsoft Family accounts.'),
+    (SvcT 's_smartcard' 'Disable Smart Card services' 'Safe' 'GX' @('SCardSvr', 'ScDeviceEnum', 'SCPolicySvc') 'Only needed for corporate smart-card logins.'),
+    (SvcT 's_trkwks' 'Disable Distributed Link Tracking' 'Safe' 'GX' @('TrkWks') 'Tracks moved files across network shares - useless at home.'),
+    (SvcT 's_offline' 'Disable Offline Files' 'Safe' 'GX' @('CscService') 'Corporate network-share caching.'),
+    (SvcT 's_payments' 'Disable Payments & NFC service' 'Safe' 'GX' @('SEMgrSvc') 'Tap-to-pay NFC on PCs.'),
+    (SvcT 's_wallet' 'Disable Wallet service' 'Safe' 'GX' @('WalletService') 'Microsoft Wallet backend.'),
+    (SvcT 's_alljoyn' 'Disable AllJoyn Router' 'Safe' 'GX' @('AJRouter') 'Old IoT device protocol.'),
+    (SvcT 's_hyperv' 'Disable Hyper-V guest services' 'Safe' 'GX' @('vmickvpexchange', 'vmicguestinterface', 'vmicshutdown', 'vmicheartbeat', 'vmicvmsession', 'vmicrdv', 'vmictimesync', 'vmicvss') 'Only used when Windows itself runs inside a Hyper-V virtual machine.'),
+    (SvcT 's_diaghub' 'Disable Diagnostics Hub collector' 'Safe' 'GX' @('diagnosticshub.standardcollector.service') 'Visual Studio / diagnostics data collector.'),
+    (SvcT 's_diagsvc' 'Disable Diagnostic Execution service' 'Safe' 'GX' @('diagsvc') 'Runs troubleshooting/diagnostic actions for support.'),
+    (SvcT 's_rasauto' 'Disable Remote Access Auto Connection' 'Safe' 'GX' @('RasAuto') 'Auto-dials VPN/dial-up connections.'),
+    (SvcT 's_wercpl' 'Disable Problem Reports control panel support' 'Safe' 'GX' @('wercplsupport') 'Backend for the Problem Reports history page.'),
+    (SvcT 's_wcn' 'Disable Windows Connect Now' 'Safe' 'GX' @('wcncsvc') 'WPS push-button Wi-Fi setup.'),
+    (SvcT 's_perception' 'Disable Mixed Reality services' 'Safe' 'GX' @('spectrum', 'perceptionsimulation', 'MixedRealityOpenXRSvc') 'Windows Mixed Reality headsets only (not SteamVR/Quest Link).'),
+    (SvcT 's_geo' 'Disable Geolocation service' 'Moderate' 'X' @('lfsvc') 'Location for Windows/apps. Weather and Find My Device lose location.'),
+    (SvcT 's_phone' 'Disable Phone service' 'Moderate' 'X' @('PhoneSvc') 'Telephony state for Phone Link calls.'),
+    (SvcT 's_pca' 'Disable Program Compatibility Assistant' 'Moderate' 'X' @('PcaSvc') 'Stops "this program might not have installed correctly" popups and their background monitoring.'),
+    (SvcT 's_dps' 'Disable Diagnostic Policy services' 'Moderate' 'X' @('DPS', 'WdiServiceHost', 'WdiSystemHost') 'Problem detection for troubleshooters. Troubleshooters and per-app data usage stop working.'),
+    (SvcT 's_rdp' 'Disable Remote Desktop host' 'Moderate' 'X' @('TermService', 'UmRdpService', 'SessionEnv') 'Nobody can RDP into this PC. Remote Desktop from this PC to others still works.'),
+    (SvcT 's_hotspot' 'Disable Mobile Hotspot service' 'Moderate' 'X' @('icssvc') 'You can no longer share this PC''s internet as a hotspot.'),
+    (SvcT 's_tapi' 'Disable Telephony service' 'Moderate' 'X' @('TapiSrv') 'Legacy modem/telephony API.'),
+    (SvcT 's_spooler' 'Disable Print Spooler' 'Moderate' '' @('Spooler') 'Only if you never print. Also closes the PrintNightmare attack surface.'),
+    (SvcT 's_bluetooth' 'Disable Bluetooth support' 'Moderate' '' @('bthserv', 'BTAGService') 'Only if you use no Bluetooth headphones, controllers or mice.'),
+    (SvcT 's_biometric' 'Disable Biometric service' 'Moderate' '' @('WbioSrvc') 'Breaks Windows Hello fingerprint/face sign-in.'),
+    (SvcT 's_wia' 'Disable scanner service (WIA)' 'Moderate' '' @('stisvc') 'Breaks scanners. Webcams are not affected.'),
+    (SvcT 's_sensors' 'Disable sensor services' 'Moderate' '' @('SensorService', 'SensrSvc', 'SensorDataService') 'Desktops only: laptops lose auto-rotate and auto-brightness.'),
+    (SvcT 's_xbl' 'Disable Xbox Live services' 'Moderate' '' @('XblAuthManager', 'XblGameSave', 'XboxNetApiSvc') 'Breaks Xbox app, Game Pass and Minecraft Bedrock sign-in. Only if you never use them.'),
+    (SvcT 's_xboxacc' 'Disable Xbox accessory service' 'Moderate' '' @('XboxGipSvc') 'Xbox controller firmware/accessory config. Controllers still work for games.'),
+    (SvcT 's_edgeupd' 'Edge updater services to Manual' 'Safe' 'GX' @('edgeupdate', 'edgeupdatem') 'Edge updater stops starting with Windows; it still runs when Edge needs it.' 3),
+    (SvcT 's_googleupd' 'Google updater services to Manual' 'Safe' 'GX' @('gupdate', 'gupdatem') 'Google updater stops starting with Windows; Chrome still updates itself.' 3),
+    (SvcT 's_adobe' 'Adobe updater service to Manual' 'Safe' 'GX' @('AdobeARMservice') 'Adobe Acrobat updater stops starting with Windows.' 3),
+
+    # ============================== APPS & BROWSERS ==============================
+    @{ Id='bgapps'; Cat='Apps & Browsers'; Name='Block background Store apps'; Risk='Safe'; Presets='SGX'
+       Desc='Stops Microsoft Store apps running in the background when you are not using them.'
+       Reg=@((RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' 'GlobalUserDisabled' 1),
+             (RegV 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' 'BackgroundAppGlobalToggle' 0)) },
+    @{ Id='edgeboost'; Cat='Apps & Browsers'; Name='Stop Edge running in the background'; Risk='Safe'; Presets='SGX'
+       Desc='Disables Edge Startup Boost and background mode - saves RAM when Edge is closed. Edge will show "managed by your organization".'
+       Reg=@((RegV $EDGE 'StartupBoostEnabled' 0), (RegV $EDGE 'BackgroundModeEnabled' 0)) },
+    @{ Id='edgetel'; Cat='Apps & Browsers'; Name='Disable Edge diagnostic data'; Risk='Safe'; Presets='SGX'
+       Desc='Edge sends only required diagnostic data.'
+       Reg=@((RegV $EDGE 'DiagnosticData' 0), (RegV $EDGE 'PersonalizationReportingEnabled' 0)) },
+    @{ Id='edgebloat'; Cat='Apps & Browsers'; Name='Remove Edge shopping, sidebar and recommendations'; Risk='Safe'; Presets='GX'
+       Desc='Disables the shopping assistant, Copilot sidebar and "recommended" popups in Edge.'
+       Reg=@((RegV $EDGE 'EdgeShoppingAssistantEnabled' 0), (RegV $EDGE 'HubsSidebarEnabled' 0), (RegV $EDGE 'ShowRecommendationsEnabled' 0)) },
+    @{ Id='chromebg'; Cat='Apps & Browsers'; Name='Stop Chrome running in the background'; Risk='Safe'; Presets='GX'
+       Desc='Chrome fully exits when you close it. Chrome will show "managed by your organization".'
+       Applies={ (Test-Path "$env:ProgramFiles\Google\Chrome") -or (Test-Path "${env:ProgramFiles(x86)}\Google\Chrome") -or (Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application") }
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Google\Chrome' 'BackgroundModeEnabled' 0)) },
+    @{ Id='onedrivestart'; Cat='Apps & Browsers'; Name='Stop OneDrive starting with Windows'; Risk='Safe'; Presets='GX'
+       Desc='Same as disabling it in Task Manager > Startup. OneDrive still works when you open it.'
+       Applies={ $null -ne (Get-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 'OneDrive') }
+       Apply={ Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' 'OneDrive' ([byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) 'Binary' }
+       Revert={ Restore-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' 'OneDrive' }
+       Check={ $v = Get-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' 'OneDrive'; $v -and ($v[0] % 2 -eq 1) } },
+
+    # ============================== WINDOWS UPDATE ==============================
+    @{ Id='norestart'; Cat='Windows Update'; Name='No auto-restart while signed in'; Risk='Safe'; Presets='SGX'
+       Desc='Windows Update will never reboot your PC in the middle of a game or download.'
+       Reg=@((RegV "$PW\WindowsUpdate\AU" 'NoAutoRebootWithLoggedOnUsers' 1)) },
+    @{ Id='nodrivers'; Cat='Windows Update'; Name='Stop Windows Update replacing drivers'; Risk='Moderate'; Presets='GX'
+       Desc='Windows Update stops overwriting your NVIDIA/AMD driver with an old one. You update drivers yourself.'
+       Reg=@((RegV "$PW\WindowsUpdate" 'ExcludeWUDriversInQualityUpdate' 1)) },
+    @{ Id='devmetadata'; Cat='Windows Update'; Name='Block device metadata downloads'; Risk='Safe'; Presets='GX'
+       Desc='Stops Windows downloading OEM device icons/info and bundled manufacturer apps for new hardware.'
+       Reg=@((RegV "$PW\Device Metadata" 'PreventDeviceMetadataFromNetwork' 1)) },
+    @{ Id='continuous'; Cat='Windows Update'; Name='No early "latest updates as soon as available"'; Risk='Safe'; Presets='GX'
+       Desc='Opts out of getting optional feature drops early - fewer surprise changes and bugs.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' 'IsContinuousInnovationOptedIn' 0)) },
+    @{ Id='storeauto'; Cat='Windows Update'; Name='Disable automatic Store app updates'; Risk='Moderate'; Presets='X'
+       Desc='Store apps no longer update in the background while you play. Update them manually in the Store.'
+       Reg=@((RegV 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore' 'AutoDownload' 2)) },
+    @{ Id='mapsupdate'; Cat='Windows Update'; Name='Disable automatic map updates'; Risk='Safe'; Presets='SGX'
+       Desc='Stops background downloads of offline map data.'
+       Reg=@((RegV 'HKLM:\SYSTEM\Maps' 'AutoUpdateEnabled' 0)) }
 )
 #endregion
 
@@ -505,21 +1002,31 @@ $script:Tweaks = @(
 
         <!-- TWEAKS -->
         <DockPanel x:Name="PageTweaks" Visibility="Collapsed">
-          <Border DockPanel.Dock="Top" Background="#0F1626" BorderBrush="#1C2740" BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,0,12">
-            <DockPanel>
-              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button x:Name="BtnRevertAll" Style="{StaticResource Btn}" Content="Revert All"/>
-                <Button x:Name="BtnApply" Style="{StaticResource BtnPrimary}" Content="APPLY CHANGES" Margin="0"/>
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Preset:" VerticalAlignment="Center" Foreground="#7F8BA8" Margin="0,0,10,0"/>
-                <Button x:Name="PresetSafe"    Style="{StaticResource Btn}" Content="Safe"/>
-                <Button x:Name="PresetGaming"  Style="{StaticResource Btn}" Content="Gaming"/>
-                <Button x:Name="PresetExtreme" Style="{StaticResource Btn}" Content="Extreme"/>
-                <Button x:Name="PresetCurrent" Style="{StaticResource Btn}" Content="Reset view"/>
-                <CheckBox x:Name="ChkRestore" Content="Create restore point first" IsChecked="True" VerticalAlignment="Center" Margin="8,0,0,0"/>
-              </StackPanel>
-            </DockPanel>
+          <Border DockPanel.Dock="Top" Background="#0F1626" BorderBrush="#1C2740" BorderThickness="1" CornerRadius="12" Padding="14,14,14,8" Margin="0,0,0,8">
+            <StackPanel>
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                  <Button x:Name="BtnRevertAll" Style="{StaticResource Btn}" Content="Revert All"/>
+                  <Button x:Name="BtnApply" Style="{StaticResource BtnPrimary}" Content="APPLY CHANGES" Margin="0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                  <TextBlock Text="Preset:" VerticalAlignment="Center" Foreground="#7F8BA8" Margin="0,0,10,0"/>
+                  <Button x:Name="PresetSafe"    Style="{StaticResource Btn}" Content="Safe"/>
+                  <Button x:Name="PresetGaming"  Style="{StaticResource Btn}" Content="Gaming"/>
+                  <Button x:Name="PresetExtreme" Style="{StaticResource Btn}" Content="Extreme"/>
+                  <Button x:Name="PresetCurrent" Style="{StaticResource Btn}" Content="Reset view"/>
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,12,0,0">
+                <CheckBox x:Name="ChkRestore" DockPanel.Dock="Right" Content="Create restore point first" IsChecked="True" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                <TextBlock x:Name="TweakCount" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="#00E5FF" FontSize="12" Margin="14,0,0,0"/>
+                <Grid>
+                  <TextBox x:Name="TweakSearch" Height="34" Padding="10,0" VerticalContentAlignment="Center" Background="#070B14" Foreground="#DCE3F5" BorderBrush="#2A3756" CaretBrush="#00E5FF" FontSize="13"/>
+                  <TextBlock x:Name="SearchHint" Text="Search tweaks... (e.g. mouse, xbox, ping, telemetry)" IsHitTestVisible="False" Margin="13,0,0,0" VerticalAlignment="Center" Foreground="#56627E"/>
+                </Grid>
+              </DockPanel>
+              <WrapPanel x:Name="CatChips" Margin="0,10,0,0"/>
+            </StackPanel>
           </Border>
           <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="TweakList"/>
@@ -808,7 +1315,7 @@ function Show-Dashboard {
     if ($s.RAMGB -lt 16) {
         Add-Rec 'mid' "Only $($s.RAMGB) GB RAM" '16 GB is the comfortable minimum for modern games with Discord/browser open. Close background apps before playing.'; $recs++
     }
-    if ($s.PowerPlan -notmatch 'Ultimate|High') {
+    if (-not (Test-PerfPlan)) {
         Add-Rec 'mid' "Power plan: $($s.PowerPlan)" 'Turn on "Ultimate Performance power plan" in Tweaks so the CPU stops downclocking.'; $recs++
     }
     if ($recs -eq 0) { Add-Rec 'ok' 'No hardware bottlenecks detected' 'Your setup looks well configured. Apply the Gaming preset in Tweaks for the last few percent.' }
@@ -816,42 +1323,164 @@ function Show-Dashboard {
 #endregion
 
 #region ---------- tweak engine ----------
+$script:Toggles    = @{}
+$script:State      = @{}
+$script:CardById   = @{}
+$script:CatHeaders = [ordered]@{}
+$script:Visible    = @()
+$script:CatFilter  = 'All'
+
+function Disable-MMAFeature($f) { Backup-Special "mma|$f" ([bool](Get-MMAgent).$f); $p = @{ $f = $true }; Disable-MMAgent @p }
+function Restore-MMAFeature($f) { $b = Pop-Special "mma|$f"; if ($b -and $b.Value) { $p = @{ $f = $true }; Enable-MMAgent @p } }
+
+function Set-NicKeyword($Keyword, $Value) {
+    foreach ($n in @(Get-NicProps $Keyword)) {
+        Backup-Special "nic|$($n.Adapter.InterfaceGuid)|$Keyword" "$($n.Prop.RegistryValue)"
+        Set-NetAdapterAdvancedProperty -Name $n.Adapter.Name -RegistryKeyword $Keyword -RegistryValue $Value
+    }
+}
+function Restore-NicKeyword($Keyword) {
+    foreach ($n in @(Get-NicProps $Keyword)) {
+        $b = Pop-Special "nic|$($n.Adapter.InterfaceGuid)|$Keyword"
+        if ($b) { Set-NetAdapterAdvancedProperty -Name $n.Adapter.Name -RegistryKeyword $Keyword -RegistryValue $b.Value }
+    }
+}
+
+function Get-SvcTarget($t) { if ($t.SvcStart) { $t.SvcStart } else { 4 } }
+
+# Should this tweak be shown on this PC at all? (service installed, setting exists, Windows 11, ...)
+function Test-Applies($t) {
+    try {
+        if ($t.Applies -and -not (& $t.Applies)) { return $false }
+        if ($t.Svc -and -not ($t.Svc | Where-Object { Test-ServiceExists $_ })) { return $false }
+        if ($t.Tasks -and @(Get-TaskMatches $t.Tasks).Count -eq 0) { return $false }
+        if ($t.Pwr -and $null -eq (Get-PwrAc $t.Pwr[0].Sub $t.Pwr[0].Set)) { return $false }
+        if ($t.Nic -and @($t.Nic.K | ForEach-Object { Get-NicProps $_ }).Count -eq 0) { return $false }
+        if ($t.MMA -and -not (Get-Command Get-MMAgent -ErrorAction SilentlyContinue)) { return $false }
+        return $true
+    } catch { return $false }
+}
+
+# Is the tweak currently active on the system? Every part it has must be in the tweaked state.
 function Test-Tweak($t) {
     try {
-        if ($t.Reg) {
-            foreach ($r in $t.Reg) { if ("$(Get-RegValue $r.P $r.N)" -ne "$($r.V)") { return $false } }
-            return $true
+        if ($t.Reg) { foreach ($r in $t.Reg) { if ("$(Get-RegValue $r.P $r.N)" -ne "$($r.V)") { return $false } } }
+        if ($t.Svc) {
+            $want = Get-SvcTarget $t
+            $ex = @($t.Svc | Where-Object { Test-ServiceExists $_ })
+            if ($ex.Count -eq 0) { return $false }
+            foreach ($s in $ex) { if ((Get-RegValue "HKLM:\SYSTEM\CurrentControlSet\Services\$s" 'Start') -ne $want) { return $false } }
         }
-        return [bool](& $t.Check)
+        if ($t.Tasks) {
+            $m = @(Get-TaskMatches $t.Tasks)
+            if ($m.Count -eq 0 -or ($m | Where-Object { "$($_.State)" -ne 'Disabled' })) { return $false }
+        }
+        if ($t.Pwr) { foreach ($p in $t.Pwr) { if ((Get-PwrAc $p.Sub $p.Set) -ne $p.V) { return $false } } }
+        if ($t.Nic) {
+            $n = @($t.Nic.K | ForEach-Object { Get-NicProps $_ })
+            if ($n.Count -eq 0 -or ($n | Where-Object { "$($_.Prop.RegistryValue)" -ne $t.Nic.V })) { return $false }
+        }
+        if ($t.MMA -and (Get-MMAgent).($t.MMA)) { return $false }
+        if ($t.Check -and -not (& $t.Check)) { return $false }
+        return $true
     } catch { return $false }
 }
 
 function Invoke-TweakApply($t) {
-    if ($t.Reg) { foreach ($r in $t.Reg) { $type = if ($r.T) { $r.T } else { 'DWord' }; Set-Reg $r.P $r.N $r.V $type } }
-    else { & $t.Apply }
+    if ($t.Reg) { foreach ($r in $t.Reg) { Set-Reg $r.P $r.N $r.V $r.T } }
+    if ($t.Svc) { $want = Get-SvcTarget $t; foreach ($s in $t.Svc) { Set-ServiceStart $s $want } }
+    if ($t.Tasks) {
+        foreach ($task in @(Get-TaskMatches $t.Tasks)) {
+            try {
+                Backup-Special "task|$($task.TaskPath)$($task.TaskName)" ("$($task.State)" -ne 'Disabled')
+                Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName | Out-Null
+            } catch { Write-Log "     could not disable task $($task.TaskName): $($_.Exception.Message)" }
+        }
+    }
+    if ($t.Pwr) {
+        foreach ($p in $t.Pwr) {
+            Backup-Special "pwr|$($p.Sub)|$($p.Set)" (Get-PwrAc $p.Sub $p.Set)
+            powercfg -setacvalueindex SCHEME_CURRENT $p.Sub $p.Set $p.V | Out-Null
+        }
+        powercfg /setactive SCHEME_CURRENT | Out-Null
+    }
+    if ($t.Nic) { foreach ($k in $t.Nic.K) { Set-NicKeyword $k $t.Nic.V } }
+    if ($t.MMA) { Disable-MMAFeature $t.MMA }
+    if ($t.Apply) { & $t.Apply }
 }
 
 function Invoke-TweakRevert($t) {
+    if ($t.Revert) { & $t.Revert }
+    if ($t.MMA) { Restore-MMAFeature $t.MMA }
+    if ($t.Nic) { foreach ($k in $t.Nic.K) { Restore-NicKeyword $k } }
+    if ($t.Pwr) {
+        foreach ($p in $t.Pwr) {
+            $b = Pop-Special "pwr|$($p.Sub)|$($p.Set)"
+            if ($b -and $null -ne $b.Value) { powercfg -setacvalueindex SCHEME_CURRENT $p.Sub $p.Set $b.Value | Out-Null }
+        }
+        powercfg /setactive SCHEME_CURRENT | Out-Null
+    }
+    if ($t.Tasks) {
+        foreach ($task in @(Get-TaskMatches $t.Tasks)) {
+            $b = Pop-Special "task|$($task.TaskPath)$($task.TaskName)"
+            if ($b -and $b.Value) { try { Enable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName | Out-Null } catch { } }
+        }
+    }
+    if ($t.Svc) { foreach ($s in $t.Svc) { Restore-ServiceStart $s } }
     if ($t.Reg) { foreach ($r in $t.Reg) { Restore-Reg $r.P $r.N } }
-    else { & $t.Revert }
 }
 
-$script:Toggles = @{}
+function Update-States {
+    try { $script:AllTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue) } catch { $script:AllTasks = @() }
+    foreach ($t in $script:Visible) { $script:State[$t.Id] = Test-Tweak $t }
+}
+
+function Sync-Toggles { foreach ($t in $script:Visible) { $script:Toggles[$t.Id].IsChecked = [bool]$script:State[$t.Id] }; Update-Pending }
+
+function New-SmallButton([string]$text, $tag) {
+    $b = New-Object Windows.Controls.Button
+    $b.Style = $window.FindResource('Btn'); $b.Content = $text; $b.Tag = $tag
+    $b.Padding = '10,3'; $b.FontSize = 11; $b.Margin = '6,0,0,0'
+    $b
+}
+
 function Build-TweakList {
-    $ui.TweakList.Children.Clear()
-    foreach ($cat in ($script:Tweaks | ForEach-Object { $_.Cat } | Select-Object -Unique)) {
-        $h = New-Text $cat.ToUpper() 12 '#7F8BA8' 'Bold'; $h.Margin = '2,10,0,8'
-        $ui.TweakList.Children.Add($h) | Out-Null
-        foreach ($t in ($script:Tweaks | Where-Object { $_.Cat -eq $cat })) {
-            $card = New-Card; $card.Margin = '0,0,0,8'
+    Write-Log 'Checking which tweaks apply to this PC...'; Update-UI
+    try { $script:NetAdapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }) } catch { $script:NetAdapters = @() }
+    try { $script:AllTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue) } catch { $script:AllTasks = @() }
+    $script:Visible = @($script:Tweaks | Where-Object { Test-Applies $_ })
+    $hidden = $script:Tweaks.Count - $script:Visible.Count
+    Write-Log "$($script:Visible.Count) tweaks apply to this PC ($hidden skipped: not installed / not supported here)."
+
+    $ui.TweakList.Children.Clear(); $script:CatHeaders.Clear(); $script:CardById.Clear(); $script:Toggles.Clear()
+    $cats = @($script:Visible | ForEach-Object { $_.Cat } | Select-Object -Unique)
+    $done = 0
+    foreach ($cat in $cats) {
+        $items = @($script:Visible | Where-Object { $_.Cat -eq $cat })
+
+        $hdr = New-Object Windows.Controls.DockPanel; $hdr.Margin = '2,14,0,8'
+        $bOff = New-SmallButton 'All off' $cat; [Windows.Controls.DockPanel]::SetDock($bOff, 'Right')
+        $bOn  = New-SmallButton 'All on'  $cat; [Windows.Controls.DockPanel]::SetDock($bOn, 'Right')
+        $bOn.Add_Click({  param($s) foreach ($t in @($script:Visible | Where-Object { $_.Cat -eq $s.Tag })) { $script:Toggles[$t.Id].IsChecked = $true };  Update-Pending })
+        $bOff.Add_Click({ param($s) foreach ($t in @($script:Visible | Where-Object { $_.Cat -eq $s.Tag })) { $script:Toggles[$t.Id].IsChecked = $false }; Update-Pending })
+        $hdr.Children.Add($bOff) | Out-Null; $hdr.Children.Add($bOn) | Out-Null
+        $title = New-Text ('{0}   {1}' -f $cat.ToUpper(), $items.Count) 12 '#7F8BA8' 'Bold'; $title.VerticalAlignment = 'Center'
+        $hdr.Children.Add($title) | Out-Null
+        $ui.TweakList.Children.Add($hdr) | Out-Null
+        $script:CatHeaders[$cat] = $hdr
+
+        foreach ($t in $items) {
+            $script:State[$t.Id] = Test-Tweak $t
+            $card = New-Card; $card.Margin = '0,0,0,8'; $card.Padding = '16,12'
             $dp = New-Object Windows.Controls.DockPanel
             $tg = New-Object Windows.Controls.Primitives.ToggleButton
             $tg.Style = $window.FindResource('Switch'); $tg.VerticalAlignment = 'Center'; $tg.Margin = '0,0,16,0'
-            $tg.IsChecked = Test-Tweak $t
+            $tg.IsChecked = [bool]$script:State[$t.Id]
+            $tg.Add_Click({ Update-Pending })
             [Windows.Controls.DockPanel]::SetDock($tg, 'Left')
             $dp.Children.Add($tg) | Out-Null
 
-            $riskColor = if ($t.Risk -eq 'Safe') { '#3DF5A0' } else { '#FFB547' }
+            $riskColor = switch ($t.Risk) { 'Safe' { '#3DF5A0' } 'Moderate' { '#FFB547' } default { '#FF4D7A' } }
             $badge = New-Object Windows.Controls.Border
             $badge.CornerRadius = 6; $badge.Padding = '8,3'; $badge.VerticalAlignment = 'Center'; $badge.Margin = '12,0,0,0'
             $badge.Background = New-Brush ($riskColor -replace '#', '#22')
@@ -868,21 +1497,72 @@ function Build-TweakList {
             $card.Child = $dp
             $ui.TweakList.Children.Add($card) | Out-Null
             $script:Toggles[$t.Id] = $tg
+            $script:CardById[$t.Id] = $card
+            $done++
         }
+        $ui.Status.Text = "Checking tweaks... $done / $($script:Visible.Count)"; Update-UI
     }
+    Build-Chips
     Update-Count
+    Update-Pending
+    Update-TweakFilter
+}
+
+function Build-Chips {
+    $ui.CatChips.Children.Clear()
+    foreach ($c in (@('All') + @($script:CatHeaders.Keys))) {
+        $n = if ($c -eq 'All') { $script:Visible.Count } else { @($script:Visible | Where-Object { $_.Cat -eq $c }).Count }
+        $b = New-SmallButton "$c  $n" $c; $b.Margin = '0,0,6,6'; $b.Padding = '12,5'
+        $b.Add_Click({ param($s) $script:CatFilter = $s.Tag; Update-Chips; Update-TweakFilter })
+        $ui.CatChips.Children.Add($b) | Out-Null
+    }
+    Update-Chips
+}
+
+function Update-Chips {
+    foreach ($b in $ui.CatChips.Children) {
+        $b.Background = if ($b.Tag -eq $script:CatFilter) { $window.FindResource('WaveGrad') } else { New-Brush '#16213A' }
+    }
+}
+
+function Update-TweakFilter {
+    $q = "$($ui.TweakSearch.Text)".Trim()
+    $ui.SearchHint.Visibility = if ($q) { 'Collapsed' } else { 'Visible' }
+    $cmp = [StringComparison]::OrdinalIgnoreCase
+    foreach ($cat in @($script:CatHeaders.Keys)) {
+        $any = $false
+        foreach ($t in @($script:Visible | Where-Object { $_.Cat -eq $cat })) {
+            $show = ($script:CatFilter -eq 'All' -or $script:CatFilter -eq $cat) -and
+                    (-not $q -or $t.Name.IndexOf($q, $cmp) -ge 0 -or $t.Desc.IndexOf($q, $cmp) -ge 0 -or $t.Cat.IndexOf($q, $cmp) -ge 0)
+            $script:CardById[$t.Id].Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
+            if ($show) { $any = $true }
+        }
+        $script:CatHeaders[$cat].Visibility = if ($any) { 'Visible' } else { 'Collapsed' }
+    }
 }
 
 function Update-Count {
-    $on = @($script:Tweaks | Where-Object { Test-Tweak $_ }).Count
-    $all = $script:Tweaks.Count
+    $on = @($script:Visible | Where-Object { $script:State[$_.Id] }).Count
+    $all = $script:Visible.Count
     $ui.SideCount.Text = "$on / $all"
-    $ui.SideBar.Value = [math]::Round(100 * $on / $all)
+    $ui.SideBar.Value = if ($all) { [math]::Round(100 * $on / $all) } else { 0 }
+    $ui.TweakCount.Text = "$all tweaks available on this PC  -  $on active"
+}
+
+function Update-Pending {
+    $n = 0
+    foreach ($t in $script:Visible) {
+        $pending = [bool]$script:Toggles[$t.Id].IsChecked -ne [bool]$script:State[$t.Id]
+        if ($pending) { $n++ }
+        $script:CardById[$t.Id].BorderBrush = if ($pending) { New-Brush '#00E5FF' } else { $window.FindResource('CardBorder') }
+    }
+    $ui.BtnApply.Content = if ($n) { "APPLY $n CHANGE$(if ($n -ne 1) { 'S' })" } else { 'APPLY CHANGES' }
 }
 
 function Set-Preset([string]$letter) {
-    foreach ($t in $script:Tweaks) { $script:Toggles[$t.Id].IsChecked = $t.Presets.Contains($letter) }
-    Write-Log "Preset selected - review the switches, then press APPLY CHANGES."
+    foreach ($t in $script:Visible) { $script:Toggles[$t.Id].IsChecked = $t.Presets.Contains($letter) }
+    Update-Pending
+    Write-Log 'Preset loaded - changed switches are outlined in cyan. Review them, then press APPLY.'
 }
 
 function New-RestorePoint {
@@ -904,8 +1584,17 @@ function New-RestorePoint {
 }
 
 function Invoke-ApplyChanges {
-    $todo = @($script:Tweaks | Where-Object { [bool]$script:Toggles[$_.Id].IsChecked -ne (Test-Tweak $_) })
+    $todo = @($script:Visible | Where-Object { [bool]$script:Toggles[$_.Id].IsChecked -ne [bool]$script:State[$_.Id] })
     if ($todo.Count -eq 0) { Write-Log 'Nothing to change - every switch already matches your system.'; return }
+
+    $turnOn = @($todo | Where-Object { $script:Toggles[$_.Id].IsChecked })
+    $risky  = @($turnOn | Where-Object { $_.Risk -ne 'Safe' })
+    $msg = "Apply $($todo.Count) change(s)?  ($($turnOn.Count) on, $($todo.Count - $turnOn.Count) off)"
+    if ($risky.Count) {
+        $msg += "`n`nIncludes $($risky.Count) Moderate/Advanced tweak(s):`n - " + (($risky | Select-Object -First 10 | ForEach-Object { $_.Name }) -join "`n - ")
+        if ($risky.Count -gt 10) { $msg += "`n - ...and $($risky.Count - 10) more" }
+    }
+    if ([Windows.MessageBox]::Show($msg, 'WaveOptimizer', 'YesNo', 'Question') -ne 'Yes') { return }
 
     if ($ui.ChkRestore.IsChecked) {
         if (-not (New-RestorePoint)) {
@@ -914,35 +1603,64 @@ function Invoke-ApplyChanges {
         }
     }
 
-    $reboot = $false
+    # the power plan must switch first, otherwise power settings land on the old plan
+    $todo = @($todo | Where-Object { $_.Id -eq 'powerplan' }) + @($todo | Where-Object { $_.Id -ne 'powerplan' })
+    $reboot = $false; $i = 0
     foreach ($t in $todo) {
+        $i++
         $want = [bool]$script:Toggles[$t.Id].IsChecked
+        $ui.Status.Text = "Applying $i / $($todo.Count): $($t.Name)"
         try {
             if ($want) { Invoke-TweakApply $t; Write-Log "ON   $($t.Name)" }
-            else       { Invoke-TweakRevert $t; Write-Log "OFF  $($t.Name) (restored original)" }
+            else       { Invoke-TweakRevert $t; Write-Log "OFF  $($t.Name)" }
             if ($t.Reboot) { $reboot = $true }
         } catch { Write-Log "FAIL $($t.Name): $($_.Exception.Message)" }
         Update-UI
     }
-    foreach ($t in $script:Tweaks) { $script:Toggles[$t.Id].IsChecked = Test-Tweak $t }
+
+    Update-States
+    foreach ($t in $todo) {
+        $want = [bool]$script:Toggles[$t.Id].IsChecked
+        if ([bool]$script:State[$t.Id] -ne $want) {
+            if ($want) { Write-Log "NOTE $($t.Name): did not stick (blocked by Windows, your edition or a policy)." }
+            else       { Write-Log "NOTE $($t.Name): it was already set like this before WaveOptimizer, so there is nothing to restore." }
+        }
+    }
+    Sync-Toggles
     Update-Count
-    $script:Specs.PowerPlan = if ("$(powercfg /getactivescheme)" -match '\((.+)\)') { $Matches[1] } else { '?' }
-    Show-Dashboard
-    $msg = "Done - $($todo.Count) change(s) applied."
-    if ($reboot) { $msg += ' Some changes need a reboot.' } else { $msg += ' Sign out/in or reboot for visual tweaks to fully apply.' }
-    Write-Log $msg
-    [Windows.MessageBox]::Show($msg, 'WaveOptimizer', 'OK', 'Information') | Out-Null
+    try { $script:Specs.PowerPlan = if ("$(powercfg /getactivescheme)" -match '\((.+)\)') { $Matches[1] } else { '?' }; Show-Dashboard } catch { }
+
+    $msg = "Done - $($todo.Count) change(s) processed. See the Log tab for details."
+    if ($reboot) { $msg += "`n`nSome changes need a REBOOT to take effect." }
+    Write-Log $msg.Replace("`n", ' ')
+    if ($todo | Where-Object { $_.Cat -in 'Explorer & Taskbar', 'Windows Visuals', 'Ads & Notifications' }) {
+        $msg += "`n`nRestart Explorer now so taskbar/desktop changes show up? (Open folders will close.)"
+        if ([Windows.MessageBox]::Show($msg, 'WaveOptimizer', 'YesNo', 'Information') -eq 'Yes') {
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 800
+            if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+            Write-Log 'Explorer restarted.'
+        }
+    } else {
+        [Windows.MessageBox]::Show($msg, 'WaveOptimizer', 'OK', 'Information') | Out-Null
+    }
 }
 
 function Invoke-RevertAll {
     $r = [Windows.MessageBox]::Show('Restore every setting WaveOptimizer changed back to its original value?', 'WaveOptimizer', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
-    foreach ($t in $script:Tweaks) { try { Invoke-TweakRevert $t } catch { Write-Log "FAIL revert $($t.Name): $($_.Exception.Message)" } }
-    # anything left over in the backup (e.g. interfaces) gets restored too
-    foreach ($k in @($script:Backup.Keys)) {
-        if ($k -like '*|*') { $parts = $k -split '\|', 2; try { Restore-Reg $parts[0] $parts[1] } catch { } }
+    $i = 0
+    foreach ($t in $script:Tweaks) {
+        $i++; $ui.Status.Text = "Reverting $i / $($script:Tweaks.Count)..."
+        try { Invoke-TweakRevert $t } catch { Write-Log "FAIL revert $($t.Name): $($_.Exception.Message)" }
+        if ($i % 10 -eq 0) { Update-UI }
     }
-    foreach ($t in $script:Tweaks) { $script:Toggles[$t.Id].IsChecked = Test-Tweak $t }
+    # anything left over in the backup (e.g. network interfaces that changed) gets restored too
+    foreach ($k in @($script:Backup.Keys)) {
+        if ($k -like 'HK*|*') { $parts = $k -split '\|', 2; try { Restore-Reg $parts[0] $parts[1] } catch { } }
+    }
+    Update-States
+    Sync-Toggles
     Update-Count
     Write-Log 'All settings reverted to their originals. Reboot recommended.'
 }
@@ -1005,7 +1723,7 @@ function Show-GpuPrefs {
     $ui.GpuPrefList.Children.Clear()
     if (-not (Test-Path $script:GpuPrefKey)) { return }
     $item = Get-Item $script:GpuPrefKey
-    foreach ($name in $item.GetValueNames()) {
+    foreach ($name in ($item.GetValueNames() | Where-Object { $_ -ne 'DirectXUserGlobalSettings' })) {
         $val = "$($item.GetValue($name))"
         $mode = if ($val -match 'GpuPreference=2') { 'High performance' } elseif ($val -match 'GpuPreference=1') { 'Power saving' } else { 'Let Windows decide' }
         $row = New-Object Windows.Controls.DockPanel; $row.Margin = '0,4'
@@ -1075,7 +1793,8 @@ $ui.BtnMax.Add_Click({ Switch-Maximize })
 $ui.PresetSafe.Add_Click({ Set-Preset 'S' })
 $ui.PresetGaming.Add_Click({ Set-Preset 'G' })
 $ui.PresetExtreme.Add_Click({ Set-Preset 'X' })
-$ui.PresetCurrent.Add_Click({ foreach ($t in $script:Tweaks) { $script:Toggles[$t.Id].IsChecked = Test-Tweak $t }; Write-Log 'Switches reset to current system state.' })
+$ui.PresetCurrent.Add_Click({ Sync-Toggles; Write-Log 'Switches reset to the current system state.' })
+$ui.TweakSearch.Add_TextChanged({ Update-TweakFilter })
 $ui.BtnApply.Add_Click({ $ui.BtnApply.IsEnabled = $false; try { Invoke-ApplyChanges } catch { Write-Log "Error: $($_.Exception.Message)" } finally { $ui.BtnApply.IsEnabled = $true } })
 $ui.BtnRevertAll.Add_Click({ Invoke-RevertAll })
 
