@@ -96,6 +96,14 @@ public class BobberEntityManager {
                 && hook.getLocation().distanceSquared(new Location(hook.getWorld(), holder.x(), holder.y(), holder.z())) < 1;
     }
 
+    /** Re-reads holders.yml (e.g. after editing it) and re-attaches to what's in the world. */
+    public void reload() {
+        holders.clear();
+        pendingRemovals.clear();
+        loadData();
+        resumeAfterReload();
+    }
+
     public void onReelIn(UUID owner) {
         pendingHooks.remove(owner);
         releaseHolder(owner);

@@ -7,8 +7,22 @@ authors: [StasisPlugin]
 commands:
   stasisfixer:
     description: Admin tools for Paper Stasis Fixer
-    usage: /stasisfixer <list|clearnearby [radius]>
-    permission: stasisfixer.admin
+    usage: /stasisfixer <reload|list|clearnearby [radius]>
+    aliases: [stasis]
 permissions:
   stasisfixer.admin:
+    description: Access to every /stasisfixer command
+    default: op
+    children:
+      stasisfixer.command.reload: true
+      stasisfixer.command.list: true
+      stasisfixer.command.clearnearby: true
+  stasisfixer.command.reload:
+    description: Use /stasisfixer reload
+    default: op
+  stasisfixer.command.list:
+    description: Use /stasisfixer list
+    default: op
+  stasisfixer.command.clearnearby:
+    description: Use /stasisfixer clearnearby
     default: op

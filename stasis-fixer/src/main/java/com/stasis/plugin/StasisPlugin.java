@@ -5,7 +5,11 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.List;
+
 public class StasisPlugin extends JavaPlugin {
+
+    private static final List<String> SUBCOMMANDS = List.of("reload", "list", "clearnearby");
 
     private BobberEntityManager bobberManager;
 
@@ -38,7 +42,21 @@ public class StasisPlugin extends JavaPlugin {
         if (args.length == 0) {
             return false;
         }
-        switch (args[0].toLowerCase()) {
+        String sub = args[0].toLowerCase();
+        if (!SUBCOMMANDS.contains(sub)) {
+            return false;
+        }
+        // Each subcommand has its own node so it can be granted individually (e.g. with LuckPerms).
+        if (!sender.hasPermission("stasisfixer.command." + sub)) {
+            sender.sendMessage("You don't have permission to use this command.");
+            return true;
+        }
+        switch (sub) {
+            case "reload" -> {
+                bobberManager.reload();
+                sender.sendMessage("Paper Stasis Fixer reloaded.");
+                return true;
+            }
             case "list" -> {
                 bobberManager.listHolders(sender);
                 return true;
@@ -65,5 +83,16 @@ public class StasisPlugin extends JavaPlugin {
                 return false;
             }
         }
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (args.length != 1) {
+            return List.of();
+        }
+        return SUBCOMMANDS.stream()
+                .filter(sub -> sub.startsWith(args[0].toLowerCase()))
+                .filter(sub -> sender.hasPermission("stasisfixer.command." + sub))
+                .toList();
     }
 }
