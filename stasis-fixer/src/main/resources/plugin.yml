@@ -1,0 +1,14 @@
+name: Paper_Stasis_Fixer
+version: '${project.version}'
+main: com.stasis.plugin.StasisPlugin
+api-version: '1.21'
+description: Spawns an invisible entity where your fishing bobber lands to keep pressure plates powered
+authors: [StasisPlugin]
+commands:
+  stasisfixer:
+    description: Admin tools for Paper Stasis Fixer
+    usage: /stasisfixer <list|clearnearby [radius]>
+    permission: stasisfixer.admin
+permissions:
+  stasisfixer.admin:
+    default: op
