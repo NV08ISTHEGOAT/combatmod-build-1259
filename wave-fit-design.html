@@ -1,0 +1,76 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wave Fit Design</title>
+<style>
+:root{--bg:#0b0f10;--fg:#e8fbfb;--aqua:#2ee6d6;--aqua2:#13a89e;--ink:#050505;--line:#1e2a2b}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:24px 16px}
+h1{margin:0 0 4px;font-size:28px;letter-spacing:.04em}h2{font-size:18px;margin:32px 0 8px;color:var(--aqua)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+figure{margin:0;background:#111819;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+figcaption{font-size:13px;opacity:.75;margin-top:6px}svg{width:100%;height:auto}
+ul{padding-left:18px}.sw{display:inline-block;width:18px;height:18px;border-radius:4px;vertical-align:middle;margin-right:6px;border:1px solid #333}
+</style></head><body>
+<h1>WAVE FIT</h1><div style="opacity:.7">Oversized hoodie + baggy pants · aqua &amp; black</div>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+ <pattern id="waves" width="60" height="30" patternUnits="userSpaceOnUse">
+  <path d="M0 20 Q15 0 30 20 T60 20" fill="none" stroke="#2ee6d6" stroke-width="3"/>
+  <path d="M0 28 Q15 10 30 28 T60 28" fill="none" stroke="#13a89e" stroke-width="2"/>
+ </pattern>
+ <symbol id="bigwave" viewBox="0 0 200 120">
+  <path d="M0 120 L0 80 C30 80 40 20 90 15 C130 10 150 40 140 60 C132 75 112 70 115 55 C118 45 130 48 128 55
+           C160 50 170 90 200 85 L200 120Z" fill="#2ee6d6"/>
+  <path d="M0 120 L0 98 C40 95 60 70 100 72 C140 74 160 100 200 100 L200 120Z" fill="#13a89e"/>
+  <g fill="#e8fbfb"><circle cx="92" cy="18" r="4"/><circle cx="104" cy="14" r="3"/><circle cx="80" cy="24" r="3"/><circle cx="116" cy="16" r="2.5"/></g>
+ </symbol>
+</defs></svg>
+
+<h2>Hoodie</h2>
+<div class="grid">
+<figure><svg viewBox="0 0 300 320">
+ <path d="M95 40 Q150 0 205 40 L270 90 L285 250 L245 255 L235 140 L235 300 L65 300 L65 140 L55 255 L15 250 L30 90Z" fill="#050505" stroke="#2ee6d6" stroke-width="2"/>
+ <path d="M110 42 Q150 75 190 42" fill="none" stroke="#2ee6d6" stroke-width="3"/>
+ <line x1="140" y1="60" x2="138" y2="110" stroke="#e8fbfb" stroke-width="2"/><line x1="160" y1="60" x2="162" y2="110" stroke="#e8fbfb" stroke-width="2"/>
+ <use href="#bigwave" x="95" y="120" width="110" height="66"/>
+ <text x="150" y="205" fill="#2ee6d6" font-size="16" font-weight="800" text-anchor="middle" letter-spacing="4">WAVE</text>
+ <path d="M95 230 L205 230 L195 280 L105 280Z" fill="none" stroke="#1e2a2b" stroke-width="2"/>
+ <rect x="65" y="285" width="170" height="15" fill="url(#waves)"/>
+ <rect x="15" y="238" width="40" height="12" fill="url(#waves)"/><rect x="245" y="238" width="40" height="12" fill="url(#waves)"/>
+</svg><figcaption>Front — chest wave print, kangaroo pocket, wave-knit cuffs &amp; hem</figcaption></figure>
+<figure><svg viewBox="0 0 300 320">
+ <path d="M95 40 Q150 0 205 40 L270 90 L285 250 L245 255 L235 140 L235 300 L65 300 L65 140 L55 255 L15 250 L30 90Z" fill="#050505" stroke="#2ee6d6" stroke-width="2"/>
+ <path d="M100 42 Q150 -5 200 42 Q150 60 100 42Z" fill="#111" stroke="#2ee6d6" stroke-width="2"/>
+ <use href="#bigwave" x="70" y="90" width="160" height="200"/>
+ <rect x="65" y="285" width="170" height="15" fill="url(#waves)"/>
+</svg><figcaption>Back — full-back crashing wave, hood up top</figcaption></figure>
+</div>
+
+<h2>Baggy Pants</h2>
+<div class="grid">
+<figure><svg viewBox="0 0 300 340">
+ <path d="M80 20 L220 20 L240 320 L165 320 L150 120 L135 320 L60 320Z" fill="#050505" stroke="#2ee6d6" stroke-width="2"/>
+ <rect x="80" y="20" width="140" height="16" fill="#111" stroke="#2ee6d6"/>
+ <line x1="140" y1="36" x2="136" y2="62" stroke="#e8fbfb" stroke-width="2"/><line x1="160" y1="36" x2="164" y2="62" stroke="#e8fbfb" stroke-width="2"/>
+ <path d="M70 170 L95 170 L92 220 L70 220Z" fill="none" stroke="#1e2a2b" stroke-width="2"/>
+ <path d="M205 170 L230 170 L232 220 L208 220Z" fill="none" stroke="#1e2a2b" stroke-width="2"/>
+ <path d="M64 250 L142 250 L136 320 L60 320Z" fill="url(#waves)"/>
+ <path d="M158 250 L236 250 L240 320 L164 320Z" fill="url(#waves)"/>
+</svg><figcaption>Front — drawstring waist, cargo pockets, wave print rising from the ankles</figcaption></figure>
+<figure><svg viewBox="0 0 300 340">
+ <path d="M80 20 L220 20 L240 320 L165 320 L150 120 L135 320 L60 320Z" fill="#050505" stroke="#2ee6d6" stroke-width="2"/>
+ <rect x="80" y="20" width="140" height="16" fill="#111" stroke="#2ee6d6"/>
+ <use href="#bigwave" x="66" y="240" width="72" height="44"/>
+ <path d="M64 285 L138 285 L136 320 L60 320Z" fill="url(#waves)"/><path d="M162 285 L236 285 L240 320 L164 320Z" fill="url(#waves)"/>
+ <text x="200" y="80" fill="#2ee6d6" font-size="11" font-weight="700" text-anchor="middle" letter-spacing="2">WAVE</text>
+</svg><figcaption>Back — small wave on left calf, WAVE tag at right back pocket</figcaption></figure>
+</div>
+
+<h2>Spec notes</h2>
+<ul>
+<li><span class="sw" style="background:#050505"></span>Base: black heavyweight fleece (400+ gsm hoodie), black cotton twill pants</li>
+<li><span class="sw" style="background:#2ee6d6"></span>Primary print: aqua #2EE6D6 &nbsp;<span class="sw" style="background:#13a89e"></span>shade #13A89E &nbsp;<span class="sw" style="background:#e8fbfb"></span>foam #E8FBFB</li>
+<li>Hoodie fit: oversized, dropped shoulders. Back wave = screen print or puff print; chest = embroidery</li>
+<li>Pants fit: wide straight leg, elastic + drawstring waist, ankle cuffs optional</li>
+<li>Print shops want vector files — ask me and I can export each graphic as a separate SVG</li>
+</ul>
+</body></html>
